@@ -1,0 +1,384 @@
+// Lector: modos página (der→izq / izq→der), doble página y vertical continuo (webtoon).
+// Abre imágenes (MangaDex, CBZ, CBR), PDF (pdf.js) y EPUB (epub.js).
+import { api, esc, toast, getSettings, chapterLabel, isDark } from './app.js';
+
+const MODES = ['rtl', 'ltr', 'webtoon'];
+const MODE_LABEL = { rtl: 'Der → Izq', ltr: 'Izq → Der', webtoon: 'Vertical' };
+
+export async function openReader(root, { src, seriesId, chapterId }) {
+  const settings = await getSettings();
+  const bgPref = settings.background || 'theme';
+  const white = bgPref === 'white' || (bgPref === 'theme' && !isDark());
+  root.innerHTML = `<div class="reader hide-ui ${white ? 'white' : ''}" tabindex="0">
+    <div class="stage"><div class="msg"><div class="spin" style="margin:40px auto"></div></div></div>
+    <div class="zones"><div data-z="left"></div><div data-z="center"></div><div data-z="right"></div></div>
+    <div class="pagenum" hidden></div>
+    <div class="ui top">
+      <button class="btn icon" data-act="close" aria-label="Salir del lector" title="Salir del lector"><svg viewBox="0 0 24 24"><path d="M15.4 5.4 14 4l-8 8 8 8 1.4-1.4L8.8 12z"/></svg></button>
+      <div class="grow"><div class="title" data-ui="series"></div><div class="sub" data-ui="chapter"></div></div>
+    </div>
+    <div class="ui bottom">
+      <div class="slider">
+        <button class="btn icon" data-act="prevch" aria-label="Capítulo anterior" title="Capítulo anterior"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg></button>
+        <span class="small" data-ui="cur">1</span>
+        <input type="range" min="1" max="1" value="1" data-ui="range" aria-label="Página">
+        <span class="small" data-ui="tot">1</span>
+        <button class="btn icon" data-act="nextch" aria-label="Capítulo siguiente" title="Capítulo siguiente"><svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg></button>
+      </div>
+      <div class="tools">
+        <button class="btn" data-act="mode" title="Cambiar modo de lectura"></button>
+        <button class="btn" data-act="double" title="Doble página">Doble página</button>
+        <button class="btn" data-act="fit" title="Ajuste de la imagen">Ajustar: alto</button>
+      </div>
+    </div>
+  </div>`;
+  const el = root.querySelector('.reader');
+  const stage = el.querySelector('.stage');
+  const ui = k => el.querySelector(`[data-ui="${k}"]`);
+  const range = ui('range');
+  el.focus();
+
+  // ----- Datos de la serie y capítulos -----
+  let series, chapters;
+  try {
+    [series, chapters] = await Promise.all([
+      api(`/api/s/${src}/series/${encodeURIComponent(seriesId)}`),
+      api(`/api/s/${src}/series/${encodeURIComponent(seriesId)}/chapters`),
+    ]);
+  } catch (e) {
+    stage.innerHTML = `<div class="msg">${esc(e.message)}<br><br><button class="btn" data-act="close">Volver</button></div>`;
+    el.classList.remove('hide-ui');
+    stage.querySelector('[data-act]').onclick = () => history.back();
+    return () => {};
+  }
+  ui('series').textContent = series.title;
+
+  const modeKey = `mode:${src}:${seriesId}`;
+  let mode = localStorage.getItem(modeKey) || settings.readerMode?.[series.type] || series.readingDir || 'rtl';
+  let double = settings.doublePage && innerWidth > innerHeight;
+  let fitWidth = false;
+
+  let chIdx = chapters.findIndex(c => c.id === chapterId);
+  if (chIdx < 0) chIdx = 0;
+  let doc = null;        // { kind, count, render(i) }
+  let page = 0;
+  let destroyed = false;
+  let saveTimer = null;
+  let epub = null;
+
+  // capítulos ordenados del más nuevo al más viejo: "siguiente" = índice menor con otro número
+  function neighbor(dir) {
+    const cur = chapters[chIdx];
+    const cands = [];
+    for (let i = chIdx + (dir > 0 ? -1 : 1); i >= 0 && i < chapters.length; i += dir > 0 ? -1 : 1) {
+      const c = chapters[i];
+      if (c.number && cur.number && c.number === cur.number) continue;
+      if (cands.length && c.number !== cands[0].c.number) break;
+      cands.push({ c, i });
+    }
+    if (!cands.length) return null;
+    return (cands.find(x => x.c.group === cur.group) || cands[0]).i;
+  }
+
+  // ----- Guardar progreso -----
+  // Se guarda con una pequeña pausa; al cambiar de capítulo o salir se envía de inmediato.
+  let pending = null;
+  function flushProgress() {
+    clearTimeout(saveTimer);
+    if (!pending) return;
+    const body = pending; pending = null;
+    api('/api/progress', { method: 'PUT', body }).catch(() => {});
+  }
+  function saveProgress(extra = {}) {
+    const c = chapters[chIdx];
+    pending = {
+      source: src, seriesId, chapterId: c.id, page: Math.min(page, Math.max(0, (doc?.count || 1) - 1)), total: doc?.count || 0,
+      seriesTitle: series.title, cover: series.cover, chapterLabel: chapterLabel(c), type: series.type, ...extra,
+    };
+    c.progress = { ...(c.progress || {}), page: pending.page, total: pending.total, cfi: pending.cfi, done: c.progress?.done || (pending.total > 0 && pending.page >= pending.total - 1) };
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(flushProgress, 700);
+  }
+
+  // ----- Carga de un capítulo -----
+  async function loadChapter(idx, startPage = null) {
+    flushProgress();
+    chIdx = idx;
+    const c = chapters[idx];
+    if (location.hash !== `#/read/${src}/${encodeURIComponent(seriesId)}/${encodeURIComponent(c.id)}`) {
+      history.replaceState(null, '', `#/read/${src}/${encodeURIComponent(seriesId)}/${encodeURIComponent(c.id)}`);
+    }
+    ui('chapter').textContent = `${chapterLabel(c)}${c.group && c.group !== 'Archivo local' ? ' · ' + c.group : ''}`;
+    el.querySelector('[data-act="prevch"]').disabled = neighbor(-1) == null;
+    el.querySelector('[data-act="nextch"]').disabled = neighbor(1) == null;
+    stage.innerHTML = '<div class="msg"><div class="spin" style="margin:40px auto"></div></div>';
+    if (epub) { epub.destroy(); epub = null; }
+    try {
+      const info = await api(`/api/s/${src}/chapters/${encodeURIComponent(c.id)}/pages`);
+      if (destroyed) return;
+      if (info.kind === 'epub') return openEpub(info.url, c);
+      doc = info.kind === 'pdf' ? await pdfDoc(info.url) : imageDoc(info.pages, c);
+    } catch (e) {
+      stage.innerHTML = `<div class="msg">No se pudo abrir el capítulo: ${esc(e.message)}<br><br><button class="btn" data-retry>Reintentar</button></div>`;
+      stage.querySelector('[data-retry]').onclick = () => loadChapter(idx, startPage);
+      el.classList.remove('hide-ui');
+      return;
+    }
+    const prog = c.progress;
+    page = startPage ?? (prog && !prog.done && prog.page < doc.count ? prog.page : 0);
+    range.max = doc.count; ui('tot').textContent = doc.count;
+    layout();
+    saveProgress();
+  }
+
+  function imageDoc(pages, c) {
+    let urls = pages.map(p => p.url);
+    let refreshed = false;
+    const d = {
+      kind: 'images', count: urls.length,
+      render(i) {
+        const img = new Image();
+        img.decoding = 'async'; img.alt = `Página ${i + 1}`; img.draggable = false;
+        img.src = urls[i];
+        img.onerror = async () => {
+          // La URL temporal de MangaDex@Home pudo caducar: pedir un servidor nuevo una vez.
+          if (src !== 'mangadex' || refreshed) return;
+          refreshed = true;
+          try {
+            const fresh = await api(`/api/s/${src}/chapters/${encodeURIComponent(c.id)}/pages?refresh=1`);
+            urls = fresh.pages.map(p => p.url);
+            stage.querySelectorAll('img').forEach(im => { const n = Number(im.dataset.i); if (!Number.isNaN(n)) im.src = urls[n]; });
+          } catch { toast('No se pudieron cargar algunas páginas'); }
+        };
+        img.dataset.i = i;
+        return img;
+      },
+      preload(i) { for (let k = i + 1; k <= i + 4 && k < urls.length; k++) { const p = new Image(); p.src = urls[k]; } },
+    };
+    return d;
+  }
+
+  async function pdfDoc(url) {
+    const pdfjs = await import('/vendor/pdf.mjs');
+    pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.mjs';
+    // se descarga completo (así también funciona desde lo guardado sin conexión)
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('No se pudo abrir el PDF');
+    const pdf = await pdfjs.getDocument({ data: new Uint8Array(await res.arrayBuffer()) }).promise;
+    return {
+      kind: 'pdf', count: pdf.numPages,
+      render(i) {
+        const canvas = document.createElement('canvas');
+        canvas.dataset.i = i;
+        pdf.getPage(i + 1).then(p => {
+          const base = p.getViewport({ scale: 1 });
+          const target = Math.min(2000, (mode === 'webtoon' ? Math.min(innerWidth, 800) : innerWidth / (double ? 2 : 1)) * devicePixelRatio);
+          const vp = p.getViewport({ scale: Math.max(target / base.width, 1) });
+          canvas.width = vp.width; canvas.height = vp.height;
+          canvas.style.aspectRatio = `${vp.width} / ${vp.height}`;
+          return p.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+        }).catch(() => {});
+        return canvas;
+      },
+      preload() {},
+    };
+  }
+
+  async function openEpub(url, c) {
+    if (!window.ePub) await new Promise((ok, fail) => { const s = document.createElement('script'); s.src = '/vendor/epub.js'; s.onload = ok; s.onerror = fail; document.head.appendChild(s); });
+    doc = { kind: 'epub', count: 0 };
+    el.classList.remove('webtoon'); el.classList.add('paged');
+    el.querySelector('[data-act="mode"]').hidden = true;
+    el.querySelector('[data-act="double"]').hidden = true;
+    el.querySelector('[data-act="fit"]').hidden = true;
+    stage.innerHTML = '<div class="epub"></div>';
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('No se pudo abrir el libro');
+    const book = window.ePub(await res.arrayBuffer());
+    const rendition = book.renderTo(stage.firstChild, { width: '100%', height: '100%', flow: 'paginated', spread: 'none' });
+    const dark = isDark();
+    rendition.themes.default({ body: { color: (dark ? '#e6e9ef' : '#1b2330') + ' !important', background: (dark ? '#141a22' : '#fbfaf7') + ' !important', 'line-height': '1.6' }, a: { color: (dark ? '#3d9cf0' : '#1674d1') + ' !important' } });
+    epub = { destroy: () => book.destroy(), next: () => rendition.next(), prev: () => rendition.prev(), rendition };
+    await rendition.display(c.progress?.cfi || undefined);
+    book.ready.then(() => book.locations.generate(1600)).then(() => {
+      const total = book.locations.length();
+      range.max = total || 1; ui('tot').textContent = '100%';
+      doc.count = total;
+    }).catch(() => {});
+    rendition.on('relocated', loc => {
+      const pct = loc.start.percentage || 0;
+      page = book.locations.length() ? book.locations.locationFromCfi(loc.start.cfi) : 0;
+      ui('cur').textContent = `${Math.round(pct * 100)}%`; range.value = page + 1;
+      saveProgress({ cfi: loc.start.cfi, page, total: doc.count });
+    });
+    range.oninput = () => { const cfi = book.locations.cfiFromLocation(Number(range.value) - 1); if (cfi) rendition.display(cfi); };
+  }
+
+  // ----- Presentación -----
+  function layout() {
+    if (!doc || doc.kind === 'epub') return;
+    el.classList.remove('at-end');
+    el.classList.toggle('webtoon', mode === 'webtoon');
+    el.classList.toggle('paged', mode !== 'webtoon');
+    el.classList.toggle('double', double && mode !== 'webtoon');
+    el.classList.toggle('fit-width', fitWidth);
+    range.classList.toggle('rtl', mode === 'rtl');
+    el.querySelector('[data-act="mode"]').textContent = `Modo: ${MODE_LABEL[mode]}`;
+    el.querySelector('[data-act="double"]').hidden = mode === 'webtoon';
+    el.querySelector('[data-act="double"]').classList.toggle('primary', double);
+    el.querySelector('[data-act="fit"]').hidden = mode === 'webtoon';
+    el.querySelector('[data-act="fit"]').textContent = fitWidth ? 'Ajustar: ancho' : 'Ajustar: alto';
+    if (mode === 'webtoon') buildWebtoon(); else showPage(page);
+  }
+
+  // Modo página: una o dos páginas; la "página" doc.count es la tarjeta de fin de capítulo.
+  function showPage(i) {
+    page = Math.max(0, Math.min(i, doc.count));
+    stage.scrollTop = 0;
+    el.classList.toggle('at-end', page >= doc.count);
+    if (page >= doc.count) return endCard();
+    const step = double ? 2 : 1;
+    if (double && page % 2 === 1 && page > 0) page -= 1;
+    const els = [doc.render(page)];
+    if (double && page + 1 < doc.count) els.push(doc.render(page + 1));
+    if (mode === 'rtl') els.reverse();
+    stage.replaceChildren(...els);
+    doc.preload(page + step - 1);
+    updateCounter();
+    saveProgress();
+  }
+
+  function endCard() {
+    const n = neighbor(1);
+    stage.innerHTML = `<div class="end"><h3>Terminaste ${esc(chapterLabel(chapters[chIdx]))}</h3>
+      ${n != null ? `<button class="btn primary" data-next>Siguiente: ${esc(chapterLabel(chapters[n]))}</button>` : '<p class="muted">No hay más capítulos en español por ahora.</p>'}
+      <button class="btn" data-act="close">Volver a la serie</button></div>`;
+    stage.querySelector('[data-next]')?.addEventListener('click', () => loadChapter(n, 0));
+    stage.querySelector('[data-act="close"]').addEventListener('click', close);
+    saveProgress(); // page ya está limitado a la última página al guardar
+    updateCounter();
+  }
+
+  function buildWebtoon() {
+    const n = neighbor(1);
+    stage.innerHTML = Array.from({ length: doc.count }, (_, i) => `<div class="pg" data-p="${i}"><div class="spin"></div></div>`).join('') +
+      `<div class="end"><h3>Fin de ${esc(chapterLabel(chapters[chIdx]))}</h3>${n != null ? `<button class="btn primary" data-next>Siguiente: ${esc(chapterLabel(chapters[n]))}</button>` : '<p class="muted">No hay más capítulos en español por ahora.</p>'}</div>`;
+    stage.querySelector('[data-next]')?.addEventListener('click', () => loadChapter(n, 0));
+    const loadObs = new IntersectionObserver(entries => {
+      for (const e of entries) {
+        if (!e.isIntersecting || e.target.dataset.loaded) continue;
+        const i = Number(e.target.dataset.p); e.target.dataset.loaded = '1';
+        const media = doc.render(i);
+        const done = () => e.target.classList.add('loaded');
+        media.addEventListener?.('load', done);
+        if (media.tagName === 'CANVAS') done();
+        e.target.replaceChildren(media);
+      }
+    }, { root: stage, rootMargin: '2000px 0px' });
+    const posObs = new IntersectionObserver(entries => {
+      for (const e of entries) if (e.isIntersecting) { page = Number(e.target.dataset.p); updateCounter(); saveProgress(); }
+    }, { root: stage, rootMargin: '-50% 0px -50% 0px' });
+    stage.querySelectorAll('.pg').forEach(p => { loadObs.observe(p); posObs.observe(p); });
+    observers.push(loadObs, posObs);
+    const target = stage.querySelector(`[data-p="${page}"]`);
+    if (page > 0 && target) {
+      // cargar las páginas anteriores para que el salto quede en su sitio
+      requestAnimationFrame(() => target.scrollIntoView());
+    }
+    updateCounter();
+  }
+  const observers = [];
+
+  function updateCounter() {
+    const shown = Math.min(page, doc.count - 1) + 1;
+    ui('cur').textContent = shown; range.value = shown;
+    const pn = el.querySelector('.pagenum');
+    pn.hidden = false; pn.textContent = `${shown} / ${doc.count}`;
+  }
+
+  // ----- Navegación -----
+  const step = () => (double && mode !== 'webtoon' ? 2 : 1);
+  function go(delta) {
+    if (epub) return delta > 0 ? epub.next() : epub.prev();
+    if (!doc) return;
+    if (mode === 'webtoon') { stage.scrollBy({ top: delta * innerHeight * 0.85, behavior: 'smooth' }); return; }
+    if (delta < 0 && page === 0) { const p = neighbor(-1); if (p != null) loadChapter(p, 0); return; }
+    if (delta > 0 && page >= doc.count) { const n = neighbor(1); if (n != null) loadChapter(n, 0); return; }
+    showPage(page + delta * step());
+  }
+  const toggleUI = () => el.classList.toggle('hide-ui');
+  function close() {
+    location.hash = `#/series/${src}/${encodeURIComponent(seriesId)}`;
+  }
+
+  el.querySelector('.zones').addEventListener('click', e => {
+    const z = e.target.dataset.z;
+    if (z === 'center') return toggleUI();
+    if (!el.classList.contains('hide-ui')) { el.classList.add('hide-ui'); return; }
+    const forward = (z === 'right') !== (mode === 'rtl');
+    go(forward ? 1 : -1);
+  });
+  // tocar en modo webtoon: alterna barras si no hubo desplazamiento
+  let downY = 0;
+  stage.addEventListener('pointerdown', e => { downY = e.clientY; });
+  stage.addEventListener('click', e => {
+    if (mode !== 'webtoon' || epub || Math.abs(e.clientY - downY) > 8 || e.target.closest('button')) return;
+    toggleUI();
+  });
+  // deslizar en modo página
+  let sx = 0, sy = 0;
+  el.querySelector('.zones').addEventListener('touchstart', e => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
+  el.querySelector('.zones').addEventListener('touchend', e => {
+    const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
+    if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy)) return;
+    const forward = (dx < 0) !== (mode === 'rtl');
+    go(forward ? 1 : -1);
+  });
+  const onKey = e => {
+    if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+    const k = e.key;
+    if (k === 'Escape') return close();
+    if (k === 'm') return el.querySelector('[data-act="mode"]').click();
+    if (mode === 'webtoon' && !epub) {
+      if (k === ' ' || k === 'PageDown') { e.preventDefault(); go(1); }
+      if (k === 'PageUp') { e.preventDefault(); go(-1); }
+      return;
+    }
+    if (k === 'ArrowRight') go(mode === 'rtl' ? -1 : 1);
+    else if (k === 'ArrowLeft') go(mode === 'rtl' ? 1 : -1);
+    else if (k === ' ' || k === 'ArrowDown' || k === 'PageDown') { e.preventDefault(); go(1); }
+    else if (k === 'ArrowUp' || k === 'PageUp') { e.preventDefault(); go(-1); }
+  };
+  document.addEventListener('keydown', onKey);
+
+  el.querySelector('.ui.top').addEventListener('click', e => { if (e.target.closest('[data-act="close"]')) close(); });
+  el.querySelector('.ui.bottom').addEventListener('click', e => {
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'prevch') { const p = neighbor(-1); if (p != null) loadChapter(p, 0); }
+    if (act === 'nextch') { const n = neighbor(1); if (n != null) loadChapter(n, 0); }
+    if (act === 'mode') {
+      mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length];
+      localStorage.setItem(modeKey, mode);
+      observers.splice(0).forEach(o => o.disconnect());
+      layout(); toast(`Modo: ${MODE_LABEL[mode]} (se recuerda para esta serie)`);
+    }
+    if (act === 'double') { double = !double; layout(); }
+    if (act === 'fit') { fitWidth = !fitWidth; layout(); }
+  });
+  range.addEventListener('input', () => {
+    if (!doc || epub) return;
+    const target = Number(range.value) - 1;
+    if (mode === 'webtoon') stage.querySelector(`[data-p="${target}"]`)?.scrollIntoView();
+    else showPage(target);
+  });
+
+  await loadChapter(chIdx);
+
+  return () => {
+    destroyed = true;
+    flushProgress(); // guardar al salir
+    document.removeEventListener('keydown', onKey);
+    observers.forEach(o => o.disconnect());
+    if (epub) epub.destroy();
+  };
+}
