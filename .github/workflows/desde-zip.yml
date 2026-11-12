@@ -57,7 +57,7 @@ jobs:
           find . -mindepth 1 -maxdepth 1 ! -name .git ! -name .github -exec rm -rf {} +
           cp -a "$SRC"/. ./
           # borrar cualquier zip que haya quedado
-          find . -path ./.git -prune -o -path ./.github -prune -o -name '*.zip' -print -delete
+          find . -type f -name '*.zip' -not -path './.git/*' -not -path './.github/*' -exec rm -f {} +
 
       - name: Guardar el cambio en main
         id: commit
