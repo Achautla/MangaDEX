@@ -1,0 +1,138 @@
+# Sube un .zip del proyecto a la raíz del repositorio y este flujo:
+#   1) lo descomprime y reemplaza el contenido del repo con el del zip
+#      (lo que no venga en el zip se borra, así eliminas archivos fácilmente),
+#   2) borra el zip y guarda el cambio en main,
+#   3) compila el APK y lo publica en Releases.
+# Nota: la carpeta .github no se toca (GitHub no deja que un flujo modifique flujos).
+name: Actualizar desde ZIP y compilar
+
+on:
+  push:
+    paths: ['**.zip']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desde-zip
+  cancel-in-progress: false
+
+jobs:
+  descomprimir:
+    runs-on: ubuntu-latest
+    outputs:
+      cambios: ${{ steps.commit.outputs.cambios }}
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Buscar el zip subido
+        id: zip
+        run: |
+          ZIP=$(git diff --name-only --diff-filter=AM HEAD~1 HEAD -- '*.zip' '**/*.zip' 2>/dev/null | head -1 || true)
+          if [ -z "$ZIP" ]; then ZIP=$(find . -path ./.git -prune -o -name '*.zip' -print | sed 's|^\./||' | head -1); fi
+          if [ -z "$ZIP" ]; then echo "::error::No encontré ningún .zip en el repositorio"; exit 1; fi
+          echo "Zip: $ZIP"
+          echo "archivo=$ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Descomprimir y reemplazar el contenido
+        env:
+          ZIP: ${{ steps.zip.outputs.archivo }}
+        run: |
+          rm -rf /tmp/nuevo && mkdir -p /tmp/nuevo
+          unzip -q "$ZIP" -d /tmp/nuevo
+          rm -rf /tmp/nuevo/__MACOSX
+          SRC=/tmp/nuevo
+          # si el zip trae una sola carpeta (por ejemplo "lector-manga/"), se usa su contenido
+          if [ "$(ls -A /tmp/nuevo | wc -l)" -eq 1 ] && [ -d "/tmp/nuevo/$(ls -A /tmp/nuevo)" ]; then
+            SRC="/tmp/nuevo/$(ls -A /tmp/nuevo)"
+          fi
+          if [ ! -f "$SRC/package.json" ]; then echo "::error::El zip no contiene package.json; ¿es el zip correcto?"; exit 1; fi
+          # cosas que nunca se suben
+          rm -rf "$SRC/node_modules" "$SRC/datos" "$SRC/www" "$SRC/android" "$SRC/.git" "$SRC/.github"
+          # espejo exacto: se borra todo (menos .git y .github) y se copia el contenido del zip
+          find . -mindepth 1 -maxdepth 1 ! -name .git ! -name .github -exec rm -rf {} +
+          cp -a "$SRC"/. ./
+          # borrar cualquier zip que haya quedado
+          find . -path ./.git -prune -o -path ./.github -prune -o -name '*.zip' -print -delete
+
+      - name: Guardar el cambio en main
+        id: commit
+        env:
+          ZIP: ${{ steps.zip.outputs.archivo }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898208+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Sin cambios"; echo "cambios=no" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "Actualizado desde $(basename "$ZIP")"
+            git push
+            echo "cambios=si" >> "$GITHUB_OUTPUT"
+          fi
+
+  apk:
+    needs: descomprimir
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Descargar el código ya descomprimido
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Instalar el SDK de Android
+        uses: android-actions/setup-android@v3
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Preparar la app y el proyecto Android
+        run: npm run android:prepare
+
+      - name: Usar siempre la misma firma (para poder actualizar sin desinstalar)
+        run: |
+          mkdir -p ~/.android
+          cp android-signing/debug.keystore ~/.android/debug.keystore
+
+      - name: Compilar el APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Renombrar
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk MangaDex.apk
+
+      - name: Guardar como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: MangaDex-apk
+          path: MangaDex.apk
+
+      - name: Publicar en Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}-zip
+          name: MangaDex 1.0.${{ github.run_number }} (desde zip)
+          body: |
+            APK compilado automáticamente después de descomprimir el zip subido.
+            Descárgalo en tu teléfono Android y ábrelo para instalar (o actualizar) la app.
+          files: MangaDex.apk
+          make_latest: true
