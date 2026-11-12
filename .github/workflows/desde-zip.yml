@@ -25,7 +25,7 @@ jobs:
       cambios: ${{ steps.commit.outputs.cambios }}
     steps:
       - name: Descargar el repositorio
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 2
 
@@ -81,18 +81,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Descargar el código ya descomprimido
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.ref_name }}
 
       - name: Instalar Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: npm
 
       - name: Instalar Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
@@ -100,28 +99,53 @@ jobs:
       - name: Instalar el SDK de Android
         uses: android-actions/setup-android@v3
 
+      - name: Ubicar el proyecto
+        id: p
+        run: |
+          # El proyecto puede estar en la raíz o dentro de una carpeta (por ejemplo "lector-manga/")
+          if [ -f package.json ] && [ -f capacitor.config.json ]; then
+            DIR=.
+          else
+            CFG=$(find . -path ./.git -prune -o -path '*/node_modules' -prune -o -name capacitor.config.json -print | head -1)
+            DIR=$(dirname "${CFG:-/nada/x}")
+          fi
+          if [ ! -f "$DIR/package.json" ]; then
+            if ls *.zip >/dev/null 2>&1; then
+              echo "::error::Hay un .zip sin descomprimir en el repositorio. Agrega .github/workflows/desde-zip.yml para que se descomprima solo, o sube los archivos ya descomprimidos."
+            else
+              echo "::error::No encontré package.json ni capacitor.config.json. Sube el contenido completo de la carpeta lector-manga."
+            fi
+            exit 1
+          fi
+          echo "Proyecto en: $DIR"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+
       - name: Instalar dependencias
-        run: npm ci
+        working-directory: ${{ steps.p.outputs.dir }}
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else echo "Sin package-lock.json: uso npm install"; npm install; fi
 
       - name: Preparar la app y el proyecto Android
+        working-directory: ${{ steps.p.outputs.dir }}
         run: npm run android:prepare
 
       - name: Usar siempre la misma firma (para poder actualizar sin desinstalar)
+        working-directory: ${{ steps.p.outputs.dir }}
         run: |
           mkdir -p ~/.android
           cp android-signing/debug.keystore ~/.android/debug.keystore
 
       - name: Compilar el APK
-        working-directory: android
+        working-directory: ${{ steps.p.outputs.dir }}/android
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Renombrar
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk MangaDex.apk
+        run: cp "${{ steps.p.outputs.dir }}/android/app/build/outputs/apk/debug/app-debug.apk" MangaDex.apk
 
       - name: Guardar como artefacto
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: MangaDex-apk
           path: MangaDex.apk
