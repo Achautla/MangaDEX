@@ -1,0 +1,32 @@
+{
+  "name": "lector-manga",
+  "version": "1.0.0",
+  "description": "Lector personal de cómics, manga y manhwa en español",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build:www": "node scripts/build-www.mjs",
+    "android:prepare": "npm run build:www && npx cap add android && npx cap sync android && node scripts/android-res.mjs"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.6.2",
+    "@capacitor/filesystem": "^8.1.5",
+    "@capacitor/share": "^8.0.3",
+    "adm-zip": "^0.6.1",
+    "archiver": "^8.0.0",
+    "epubjs": "^0.3.93",
+    "express": "^5.3.0",
+    "node-unrar-js": "^2.0.2",
+    "pdfjs-dist": "^4.10.38"
+  },
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.2",
+    "esbuild": "^0.28.2"
+  }
+}

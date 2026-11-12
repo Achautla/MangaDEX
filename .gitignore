@@ -1,0 +1,7 @@
+node_modules/
+datos/
+biblioteca/*
+!biblioteca/LEEME.txt
+config.json
+www/
+android/

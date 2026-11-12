@@ -1,0 +1,13 @@
+{
+  "appId": "com.brayand.mangadex",
+  "appName": "MangaDex",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#1d3550"
+  },
+  "plugins": {
+    "CapacitorHttp": { "enabled": false },
+    "SystemBars": { "insetsHandling": "css", "style": "LIGHT" }
+  }
+}
