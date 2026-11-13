@@ -1,7 +1,10 @@
 // Lector: modos página (der→izq / izq→der), doble página y vertical continuo (webtoon).
 // Abre imágenes (MangaDex, CBZ, CBR), PDF (pdf.js) y EPUB (epub.js).
 import { api, esc, toast, getSettings, chapterLabel, isDark } from './app.js';
-import { STANDALONE, resolveImage, getBlob } from './platform.js';
+import { STANDALONE, resolveImage, getBlob, logError } from './platform.js';
+
+const LOGO = '/brand/logo-256.png';
+const loadingHTML = '<div class="msg"><img class="loading-logo" src="/brand/logo-256.png" alt="Cargando…"></div>';
 
 const MODES = ['rtl', 'ltr', 'webtoon'];
 const MODE_LABEL = { rtl: 'Der → Izq', ltr: 'Izq → Der', webtoon: 'Vertical' };
@@ -11,7 +14,7 @@ export async function openReader(root, { src, seriesId, chapterId }) {
   const bgPref = settings.background || 'theme';
   const white = bgPref === 'white' || (bgPref === 'theme' && !isDark());
   root.innerHTML = `<div class="reader hide-ui ${white ? 'white' : ''}" tabindex="0">
-    <div class="stage"><div class="msg"><div class="spin" style="margin:40px auto"></div></div></div>
+    <div class="stage">${loadingHTML}</div>
     <div class="zones"><div data-z="left"></div><div data-z="center"></div><div data-z="right"></div></div>
     <div class="pagenum" hidden></div>
     <div class="ui top">
@@ -78,6 +81,7 @@ export async function openReader(root, { src, seriesId, chapterId }) {
     const cands = [];
     for (let i = chIdx + (dir > 0 ? -1 : 1); i >= 0 && i < chapters.length; i += dir > 0 ? -1 : 1) {
       const c = chapters[i];
+      if (c.external) continue; // se leen en el sitio oficial
       if (c.number && cur.number && c.number === cur.number) continue;
       if (cands.length && c.number !== cands[0].c.number) break;
       cands.push({ c, i });
@@ -117,7 +121,16 @@ export async function openReader(root, { src, seriesId, chapterId }) {
     ui('chapter').textContent = `${chapterLabel(c)}${c.group && c.group !== 'Archivo local' ? ' · ' + c.group : ''}`;
     el.querySelector('[data-act="prevch"]').disabled = neighbor(-1) == null;
     el.querySelector('[data-act="nextch"]').disabled = neighbor(1) == null;
-    stage.innerHTML = '<div class="msg"><div class="spin" style="margin:40px auto"></div></div>';
+    stage.innerHTML = loadingHTML;
+    if (c.external) {
+      stage.innerHTML = `<div class="end"><img class="loading-logo" style="animation:none" src="${LOGO}" alt=""><h3>${esc(chapterLabel(c))}</h3>
+        <p>Este capítulo está publicado en un sitio oficial y se lee allá.</p>
+        <a class="btn primary" href="${esc(c.external)}" target="_blank" rel="noopener">Abrir en el sitio oficial ↗</a>
+        <button class="btn" data-act="close">Volver a la serie</button></div>`;
+      stage.querySelector('[data-act="close"]').addEventListener('click', close);
+      el.classList.remove('hide-ui');
+      return;
+    }
     if (epub) { epub.destroy(); epub = null; }
     try {
       const info = await api(`/api/s/${src}/chapters/${encodeURIComponent(c.id)}/pages`);
@@ -139,31 +152,43 @@ export async function openReader(root, { src, seriesId, chapterId }) {
 
   function imageDoc(pages, c) {
     let urls = pages.map(p => p.url);
-    let refreshed = false;
-    const d = {
+    let refreshP = null;
+    // Mientras llega la imagen se ve el logo de la app; si falla, se reintenta y al final se ofrece "Reintentar".
+    async function load(i, img, attempt = 0) {
+      try {
+        const real = STANDALONE ? await resolveImage(urls[i]) : urls[i];
+        await new Promise((ok, fail) => { const t = new Image(); t.onload = ok; t.onerror = () => fail(new Error('La imagen no cargó')); t.src = real; });
+        if (!img.isConnected && !img._keep) return;
+        img.src = real; img.alt = `Página ${i + 1}`;
+        img.classList.remove('loading-logo');
+        img.dispatchEvent(new Event('pageready'));
+      } catch (e) {
+        if (attempt === 0 && src === 'mangadex') {
+          // La URL temporal de MangaDex@Home pudo caducar: se pide un servidor nuevo (una vez para todas las páginas)
+          refreshP ||= api(`/api/s/${src}/chapters/${encodeURIComponent(c.id)}/pages?refresh=1`).then(f => { urls = f.pages.map(p => p.url); }).catch(() => {});
+          await refreshP;
+          return load(i, img, 1);
+        }
+        if (attempt < 2) { await new Promise(r => setTimeout(r, 1200)); return load(i, img, attempt + 1); }
+        logError(`Página ${i + 1} de ${chapterLabel(c)} (${src})`, e);
+        const box = document.createElement('div');
+        box.className = 'pg-error';
+        box.innerHTML = `<img src="${LOGO}" alt=""><p>No se pudo cargar la página ${i + 1}.</p><button class="btn" type="button">Reintentar</button>`;
+        box.querySelector('button').onclick = ev => { ev.stopPropagation(); box.replaceWith(img); load(i, img, 1); };
+        img.replaceWith(box);
+      }
+    }
+    return {
       kind: 'images', count: urls.length,
       render(i) {
         const img = new Image();
-        img.decoding = 'async'; img.alt = `Página ${i + 1}`; img.draggable = false;
-        const setSrc = u => { if (STANDALONE) resolveImage(u).then(x => { img.src = x; }).catch(() => img.onerror?.()); else img.src = u; };
-        img._setSrc = setSrc;
-        setSrc(urls[i]);
-        img.onerror = async () => {
-          // La URL temporal de MangaDex@Home pudo caducar: pedir un servidor nuevo una vez.
-          if (src !== 'mangadex' || refreshed) return;
-          refreshed = true;
-          try {
-            const fresh = await api(`/api/s/${src}/chapters/${encodeURIComponent(c.id)}/pages?refresh=1`);
-            urls = fresh.pages.map(p => p.url);
-            stage.querySelectorAll('img').forEach(im => { const n = Number(im.dataset.i); if (!Number.isNaN(n)) (im._setSrc || (u => { im.src = u; }))(urls[n]); });
-          } catch { toast('No se pudieron cargar algunas páginas'); }
-        };
-        img.dataset.i = i;
+        img.decoding = 'async'; img.alt = 'Cargando…'; img.draggable = false;
+        img.className = 'loading-logo'; img.src = LOGO; img.dataset.i = i;
+        queueMicrotask(() => load(i, img));
         return img;
       },
       preload(i) { for (let k = i + 1; k <= i + 4 && k < urls.length; k++) { if (STANDALONE) resolveImage(urls[k]).catch(() => {}); else { const p = new Image(); p.src = urls[k]; } } },
     };
-    return d;
   }
 
   async function pdfDoc(url) {
@@ -256,7 +281,7 @@ export async function openReader(root, { src, seriesId, chapterId }) {
     stage.replaceChildren(wrap);
     resetZoom();
     // al cargar la imagen cambia su tamaño: recalcular límites del desplazamiento
-    els.forEach(m => m.addEventListener?.('load', () => applyZoom(), { once: true }));
+    els.forEach(m => m.addEventListener?.('pageready', () => applyZoom(), { once: true }));
     doc.preload(page + step - 1);
     updateCounter();
     saveProgress();
@@ -276,7 +301,7 @@ export async function openReader(root, { src, seriesId, chapterId }) {
 
   function buildWebtoon() {
     const n = neighbor(1);
-    stage.innerHTML = Array.from({ length: doc.count }, (_, i) => `<div class="pg" data-p="${i}"><div class="spin"></div></div>`).join('') +
+    stage.innerHTML = Array.from({ length: doc.count }, (_, i) => `<div class="pg" data-p="${i}"><img class="loading-logo" src="${LOGO}" alt=""></div>`).join('') +
       `<div class="end"><h3>Fin de ${esc(chapterLabel(chapters[chIdx]))}</h3>${n != null ? `<button class="btn primary" data-next>Siguiente: ${esc(chapterLabel(chapters[n]))}</button>` : '<p class="muted">No hay más capítulos en español por ahora.</p>'}</div>`;
     stage.querySelector('[data-next]')?.addEventListener('click', () => loadChapter(n, 0));
     const loadObs = new IntersectionObserver(entries => {
@@ -285,7 +310,7 @@ export async function openReader(root, { src, seriesId, chapterId }) {
         const i = Number(e.target.dataset.p); e.target.dataset.loaded = '1';
         const media = doc.render(i);
         const done = () => e.target.classList.add('loaded');
-        media.addEventListener?.('load', done);
+        media.addEventListener?.('pageready', done);
         if (media.tagName === 'CANVAS') done();
         e.target.replaceChildren(media);
       }

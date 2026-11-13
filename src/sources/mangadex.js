@@ -87,7 +87,15 @@ export function createMangaDex(config, getSettings) {
       id: m.id,
       title: altEs[0] && !a.title.es && !a.title['es-la'] ? altEs[0] : pickTitle(a.title),
       altTitles: [...new Set([...(a.altTitles || []).map(pickTitle), pickTitle(a.title)])].slice(0, 8),
-      description: a.description?.['es-la'] || a.description?.es || a.description?.en || '',
+      // Sinopsis: en español si MangaDex la tiene; si no, la original (la app la traduce)
+      ...(() => {
+        const d = a.description || {};
+        for (const l of ['es-la', 'es', 'en']) if (d[l]) return { description: d[l], descriptionLang: l.startsWith('es') ? 'es' : l };
+        const [l, txt] = Object.entries(d).find(([, v]) => v) || [];
+        return { description: txt || '', descriptionLang: l || null };
+      })(),
+      // Idiomas disponibles (de los que el usuario eligió en Ajustes)
+      languages: (a.availableTranslatedLanguages || []).filter(l => langs().includes(l)),
       cover: cover ? `/api/img?u=${encodeURIComponent(`${UPLOADS}/covers/${m.id}/${cover.attributes.fileName}.512.jpg`)}` : null,
       authors: rel('author').map(r => r.attributes.name),
       artists: rel('artist').map(r => r.attributes.name),
@@ -175,8 +183,11 @@ export function createMangaDex(config, getSettings) {
       }, { ttl: 2 * 60_000 });
       for (const c of json.data) {
         const a = c.attributes;
-        if (a.externalUrl || a.pages === 0) continue; // capítulos alojados fuera de MangaDex
+        // Capítulos alojados en sitios oficiales (p. ej. MangaPlus): se muestran con enlace externo
+        const external = a.externalUrl || null;
+        if (!external && a.pages === 0) continue;
         out.push({
+          external,
           id: c.id,
           number: a.chapter,
           volume: a.volume,
@@ -228,7 +239,7 @@ export function createMangaDex(config, getSettings) {
         const manga = (c.relationships || []).find(r => r.type === 'manga');
         out.push({
           seriesId: manga?.id, chapterId: c.id, number: c.attributes.chapter,
-          title: c.attributes.title || '', date: c.attributes.readableAt,
+          title: c.attributes.title || '', date: c.attributes.readableAt, lang: c.attributes.translatedLanguage,
           group: (c.relationships || []).filter(r => r.type === 'scanlation_group' && r.attributes).map(r => r.attributes.name).join(', '),
         });
       }

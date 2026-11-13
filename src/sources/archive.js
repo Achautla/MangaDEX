@@ -78,7 +78,7 @@ export function createArchive(config) {
     return {
       items: docs.map(d => ({
         source: 'archive', id: d.identifier, title: first(d.title) || d.identifier.replace(/[_-]+/g, ' '),
-        cover: cover(d.identifier), type: 'cómic', year: yearOf(d),
+        cover: cover(d.identifier), type: 'cómic', year: yearOf(d), languages: [langOf(d.language) || 'en'],
       })),
       hasMore: page * 30 < (json.response?.numFound || 0),
     };
@@ -99,7 +99,8 @@ export function createArchive(config) {
     const cols = [].concat(meta.collection || []).map(collName).filter(Boolean);
     return {
       source: 'archive', id, title: strip(meta.title) || id, altTitles: [],
-      description: strip(meta.description) + `\n\nFuente: Internet Archive (archive.org/details/${id}).`,
+      description: strip(meta.description), descriptionLang: null,
+      languages: [langOf(meta.language) || 'en'],
       cover: cover(id), authors: [].concat(meta.creator || []).map(strip).filter(Boolean),
       artists: [], status: 'Finalizado', type: 'cómic', demographic: null,
       genres: cols.map(name => ({ id: [].concat(meta.collection).find(c => collName(c) === name), name })),

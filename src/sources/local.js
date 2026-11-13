@@ -76,14 +76,14 @@ export function createLocal(config) {
           number: chapterNumber(path.basename(c.abs)),
           volume: null,
           title: label.replace(BOOK_RE, ''),
-          lang: 'es', group: 'Archivo local', date: null, pages: null,
+          lang: null, group: 'Archivo local', date: null, pages: null,
         };
       });
       const s = {
         source: 'local', id, title, altTitles: [], description: '',
         cover: `/api/local/cover/${id}`,
         authors: [], artists: [], status: null, type: 'cómic', demographic: null,
-        genres: [], contentRating: 'safe', year: null, readingDir: 'ltr',
+        genres: [], contentRating: 'safe', year: null, readingDir: 'ltr', languages: [], descriptionLang: null,
         chapters: chs,
       };
       // Metadatos de ComicInfo.xml (del primer archivo que lo tenga)
@@ -98,11 +98,13 @@ export function createLocal(config) {
             s.authors = (info.Writer || '').split(',').map(x => x.trim()).filter(Boolean);
             s.artists = (info.Penciller || '').split(',').map(x => x.trim()).filter(Boolean);
             s.year = Number(info.Year) || null;
+            if (info.LanguageISO) s.languages = [info.LanguageISO.toLowerCase()];
             if (/yes/i.test(info.Manga || '')) { s.type = 'manga'; s.readingDir = 'rtl'; }
             if (info.Format && /webtoon|long strip/i.test(info.Format)) { s.type = 'manhwa'; s.readingDir = 'webtoon'; }
           }
         } catch { /* archivo dañado: se ignora el metadato */ }
       }
+      if (s.languages[0]) chs.forEach(c => { c.lang = s.languages[0]; });
       if (chs.every(c => c.kind === 'epub')) s.type = 'libro';
       series.set(id, s);
     }

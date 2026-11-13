@@ -12,6 +12,7 @@ import { createMangaDex } from './src/sources/mangadex.js';
 import { createLocal } from './src/sources/local.js';
 import { createDownloads } from './src/downloads.js';
 import { createArchive } from './src/sources/archive.js';
+import { createTranslator } from './src/translate.js';
 import { ZipArchive } from 'archiver';
 import { HttpError } from './src/util.js';
 
@@ -37,6 +38,19 @@ const mangadex = createMangaDex(config, store.settings);
 const archive = createArchive({ archiveBase: process.env.ARCHIVE_BASE, iiifBase: process.env.IIIF_BASE });
 const sources = { mangadex, archive, local };
 const downloads = createDownloads({ config, store, sources });
+store.db.translations ||= {};
+const translator = createTranslator({
+  base: process.env.TRANSLATE_API || undefined,
+  email: () => store.settings().translateEmail || '',
+  cache: {
+    get: k => store.db.translations[k],
+    set: (k, v) => {
+      const t = store.db.translations; t[k] = v;
+      const keys = Object.keys(t); if (keys.length > 3000) keys.slice(0, keys.length - 3000).forEach(x => delete t[x]);
+      store.save();
+    },
+  },
+});
 const imgCacheDir = path.join(config.dataDir, 'cache-imagenes');
 fs.mkdirSync(imgCacheDir, { recursive: true });
 
@@ -87,6 +101,13 @@ app.get('/api/s/:src/chapters/:id/pages', wrap(async (req, res) => {
   const local = await downloads.pagesFor(req.params.src, req.params.id);
   if (local) return res.json(local);
   res.json(await src(req.params.src).pages(req.params.id, { refresh: req.query.refresh === '1' }));
+}));
+
+// ---------- Traducción de sinopsis ----------
+app.post('/api/translate', wrap(async (req, res) => {
+  const { text = '', from = 'autodetect' } = req.body || {};
+  if (store.settings().translate === false) return res.json({ text, translated: false });
+  res.json(await translator.translate(String(text), from || 'autodetect'));
 }));
 
 // ---------- Descargas en la computadora ----------
@@ -262,7 +283,7 @@ app.get('/api/updates', wrap(async (req, res) => {
 // ---------- Ajustes ----------
 app.get('/api/settings', (req, res) => res.json({ ...store.settings(), libraryDir: path.resolve(config.libraryDir) }));
 app.put('/api/settings', (req, res) => {
-  const allowed = ['languages', 'contentRating', 'dataSaver', 'readerMode', 'doublePage', 'background', 'theme', 'profile'];
+  const allowed = ['languages', 'contentRating', 'dataSaver', 'readerMode', 'doublePage', 'background', 'theme', 'profile', 'translate', 'translateEmail'];
   for (const k of allowed) if (k in (req.body || {})) store.db.settings[k] = req.body[k];
   store.save(); res.json(store.settings());
 });

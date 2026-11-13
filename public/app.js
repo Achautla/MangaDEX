@@ -1,6 +1,6 @@
 // Pirate Reader — lector personal de cómics, manhwa y manga (SPA sin compilación).
 import { openReader } from './reader.js';
-import { STANDALONE, platformApi, imgAttr, shareFiles, syncSystemBars } from './platform.js';
+import { STANDALONE, platformApi, imgAttr, shareFiles, syncSystemBars, logError, readLog, clearLog } from './platform.js';
 import {
   deviceSupported, saveToDevice, removeFromDevice, deviceList, isOnDevice, deviceQueue, onDeviceQueue,
   cancelDevice, storageInfo, fmtBytes,
@@ -24,6 +24,7 @@ export async function api(path, opts = {}) {
       return data;
     } catch (e) {
       if (!navigator.onLine) setOffline(true);
+      logError(`API ${path.split('?')[0]}`, e);
       throw e;
     }
   }
@@ -48,7 +49,7 @@ export async function api(path, opts = {}) {
   }
   if (res.headers.get('X-Offline')) setOffline(true);
   else if (offline) { setOffline(false); flushProgress(); }
-  if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+  if (!res.ok) { const err = new Error(data.error || `Error ${res.status}`); logError(`API ${path.split('?')[0]}`, err); throw err; }
   return data;
 }
 function queueProgress(body) {
@@ -136,6 +137,15 @@ const ICON = {
 };
 
 const typeLabel = t => ({ manga: 'Manga', manhwa: 'Manhwa', manhua: 'Manhua', 'cómic': 'Cómic', libro: 'Libro' }[t] || t || '');
+// Etiquetas de idioma del contenido
+const LANG_NAME = { es: 'Español (España)', 'es-la': 'Español latino', en: 'Inglés', 'pt-br': 'Portugués', pt: 'Portugués', fr: 'Francés', it: 'Italiano', de: 'Alemán', ja: 'Japonés', ko: 'Coreano', zh: 'Chino' };
+const langName = l => (l ? LANG_NAME[l] || l.toUpperCase() : 'Idioma no indicado');
+const langShort = l => (!l ? '?' : l.startsWith('es') ? 'ES' : l.split('-')[0].toUpperCase());
+const langBadge = langs => {
+  const shorts = [...new Set((langs || []).map(langShort))];
+  return `<span class="badge lang" title="${esc((langs || []).map(langName).join(', ') || 'Idioma no indicado')}">${esc(shorts.length ? shorts.join(' · ') : '?')}</span>`;
+};
+export { langName };
 const chapterLabel = c => {
   const parts = [];
   if (c.volume) parts.push(`Vol. ${c.volume}`);
@@ -150,7 +160,7 @@ function cardHTML(s, extra = '') {
   const href = `#/series/${s.source}/${encodeURIComponent(s.id)}`;
   return `<a class="card" href="${href}">
     <div class="cover">${s.cover ? `<img loading="lazy" ${imgAttr(s.cover)} alt="">` : ''}
-      ${s.type ? `<span class="badge">${esc(typeLabel(s.type))}</span>` : ''}${extra}</div>
+      ${s.type ? `<span class="badge">${esc(typeLabel(s.type))}</span>` : ''}${langBadge(s.languages)}${extra}</div>
     <div class="t">${esc(s.title)}</div></a>`;
 }
 const skeletonGrid = n => `<div class="grid">${Array.from({ length: n }, () => '<div class="card"><div class="cover skel"></div><div class="skel" style="height:14px;width:80%"></div></div>').join('')}</div>`;
@@ -529,8 +539,9 @@ async function viewSeries([src, id]) {
   }
   let asc = localStorage.getItem('chapAsc') === '1';
   const ordered = () => asc ? [...chapters].reverse() : chapters;
-  const oldestFirst = [...chapters].reverse();
-  const inProgress = [...chapters].filter(c => c.progress && !c.progress.done && c.progress.updatedAt).sort((a, b) => b.progress.updatedAt - a.progress.updatedAt)[0];
+  const readable = chapters.filter(c => !c.external);
+  const oldestFirst = [...readable].reverse();
+  const inProgress = [...readable].filter(c => c.progress && !c.progress.done && c.progress.updatedAt).sort((a, b) => b.progress.updatedAt - a.progress.updatedAt)[0];
   let lastDoneIdx = -1; oldestFirst.forEach((c, i) => { if (c.progress?.done) lastDoneIdx = i; });
   const doneNums = new Set(oldestFirst.filter(c => c.progress?.done && c.number).map(c => c.number));
   const lastGroup = oldestFirst[lastDoneIdx]?.group;
@@ -550,6 +561,7 @@ async function viewSeries([src, id]) {
         <h1>${esc(s.title)}</h1>
         <div class="muted small">${esc([...new Set([...(s.authors || []), ...(s.artists || [])])].join(', '))}</div>
         <div class="meta">${meta.map(m => `<span>${esc(m)}</span>`).join('<span>·</span>')}<span>·</span><span>${chapters.length} capítulos</span></div>
+        <div class="chips" style="margin:4px 0 8px" aria-label="Idiomas">${(() => { const ls = [...new Set([...(s.languages || []), ...chapters.map(c => c.lang).filter(Boolean)])]; return ls.length ? ls.map(l => `<span class="chip langchip">${esc(langName(l))}</span>`).join('') : '<span class="chip langchip">Idioma no indicado</span>'; })()}</div>
         <div class="actions">
           ${cont ? `<a class="btn primary" href="#/read/${src}/${encodeURIComponent(id)}/${encodeURIComponent(cont.id)}">${inProgress || lastDoneIdx >= 0 ? 'Continuar' : 'Empezar a leer'} · ${esc(chapterLabel(cont))}</a>` : ''}
           <button class="btn" id="lib">${s.inLibrary ? ICON.check + 'En biblioteca' : ICON.plus + 'Agregar a biblioteca'}</button>
@@ -559,7 +571,9 @@ async function viewSeries([src, id]) {
       </div>
     </div>
     ${s.genres?.length ? `<div class="chips" style="margin:16px 0">${s.genres.map(genreChip).join('')}</div>` : ''}
-    ${s.description ? `<div class="desc" id="desc">${esc(s.description)}</div><button class="btn" id="more" style="margin-bottom:8px">Ver más</button>` : ''}
+    ${s.description ? `<div class="desc" id="desc">${esc(s.description)}</div>
+      <div class="desc-note muted small" id="desc-note" ${s.descriptionLang === 'es' ? 'hidden' : ''}>${s.descriptionLang === 'es' ? '' : 'Traduciendo la sinopsis…'}</div>
+      <button class="btn" id="more" style="margin-bottom:8px">Ver más</button>` : '<p class="muted small">Esta obra no tiene sinopsis.</p>'}
     ${src === 'mangadex' ? '<p class="muted small">Contenido de MangaDex. El crédito de cada traducción es del grupo indicado en el capítulo.</p>' : ''}
     ${src === 'archive' ? `<p class="muted small">Cómic de dominio público alojado en Internet Archive. <a href="https://archive.org/details/${encodeURIComponent(id)}" target="_blank" rel="noopener" style="color:var(--accent)">Ver en archive.org</a></p>` : ''}
     <div class="head" style="margin-top:24px"><h2 style="margin:0;flex:1">Capítulos</h2>
@@ -568,6 +582,21 @@ async function viewSeries([src, id]) {
     <div id="chaps"></div>`;
   $('#back').onclick = () => history.length > 1 ? history.back() : (location.hash = '#/explore');
   const descEl = $('#desc');
+  // La sinopsis siempre en español: si viene en otro idioma, se traduce automáticamente
+  if (descEl && s.descriptionLang !== 'es') {
+    const note = $('#desc-note'), original = s.description;
+    api('/api/translate', { method: 'POST', body: { text: original, from: s.descriptionLang || 'autodetect' } }).then(r => {
+      if (!document.body.contains(descEl)) return;
+      if (r.translated) {
+        let showingOriginal = false;
+        descEl.textContent = r.text;
+        note.hidden = false;
+        note.innerHTML = `Traducción automática${r.from ? ` del ${esc(langName(r.from).toLowerCase())}` : ''} · <button class="linkbtn" id="orig">Ver original</button>`;
+        $('#orig').onclick = () => { showingOriginal = !showingOriginal; descEl.textContent = showingOriginal ? original : r.text; $('#orig').textContent = showingOriginal ? 'Ver traducción' : 'Ver original'; };
+      } else if (r.error) { note.hidden = false; note.textContent = `Sinopsis en su idioma original (${r.error.toLowerCase()}).`; }
+      else note.hidden = true;
+    }).catch(() => { note.hidden = false; note.textContent = 'Sinopsis en su idioma original (no se pudo traducir).'; });
+  }
   if (descEl) {
     if (descEl.scrollHeight <= descEl.clientHeight + 4) $('#more').remove();
     else $('#more').onclick = e => { descEl.classList.toggle('open'); e.target.textContent = descEl.classList.contains('open') ? 'Ver menos' : 'Ver más'; };
@@ -576,7 +605,7 @@ async function viewSeries([src, id]) {
   $('#lib').onclick = async () => {
     try {
       if (inLib) await api(`/api/library/${src}/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      else await api('/api/library', { method: 'POST', body: { source: src, id, title: s.title, cover: s.cover, type: s.type, readingDir: s.readingDir } });
+      else await api('/api/library', { method: 'POST', body: { source: src, id, title: s.title, cover: s.cover, type: s.type, readingDir: s.readingDir, languages: s.languages } });
       inLib = !inLib;
       $('#cat').hidden = !inLib;
       $('#lib').innerHTML = inLib ? ICON.check + 'En biblioteca' : ICON.plus + 'Agregar a biblioteca';
@@ -587,7 +616,7 @@ async function viewSeries([src, id]) {
     const name = prompt('Nombre de la categoría (por ejemplo: Leyendo, Pendientes, Terminados):');
     if (!name?.trim()) return;
     try {
-      await api('/api/library', { method: 'POST', body: { source: src, id, title: s.title, cover: s.cover, type: s.type, readingDir: s.readingDir, category: name.trim() } });
+      await api('/api/library', { method: 'POST', body: { source: src, id, title: s.title, cover: s.cover, type: s.type, readingDir: s.readingDir, languages: s.languages, category: name.trim() } });
       toast(`Movido a “${name.trim()}”`);
     } catch (e) { toast(e.message); }
   };
@@ -604,13 +633,20 @@ async function viewSeries([src, id]) {
   const drawChaps = () => {
     $('#chaps').innerHTML = chapters.length ? `<div class="rows">${ordered().map(c => {
       const p = c.progress, done = p?.done;
+      const meta = esc([c.group, fmtDate(c.date), p && !done && p.total ? `pág. ${p.page + 1}/${p.total}` : ''].filter(Boolean).join(' · '));
+      const tag = `<span class="status lang">${esc(langName(c.lang))}</span>`;
+      if (c.external) return `<div class="row" data-row="${esc(c.id)}">
+        <a class="grow" href="${esc(c.external)}" target="_blank" rel="noopener">
+          <div class="title">${esc(chapterLabel(c))}</div>
+          <div class="muted small">${tag} Sitio oficial · se abre en el navegador${meta ? ' · ' + meta : ''}</div></a>
+        <span class="status">Externo ↗</span></div>`;
       return `<div class="row ${done ? 'read' : ''}" data-row="${esc(c.id)}">
         <a class="grow" href="#/read/${src}/${encodeURIComponent(id)}/${encodeURIComponent(c.id)}">
           <div class="title">${esc(chapterLabel(c))}</div>
-          <div class="muted small">${esc([c.group, fmtDate(c.date), c.lang === 'es-la' ? 'Latino' : c.lang === 'es' ? 'España' : c.lang === 'en' ? 'Inglés' : '', p && !done && p.total ? `pág. ${p.page + 1}/${p.total}` : ''].filter(Boolean).join(' · '))}</div></a>
+          <div class="muted small">${tag} ${meta}</div></a>
         <span data-dl-state>${dlIcons(c)}</span>
         <button class="btn icon" data-mark="${esc(c.id)}" aria-label="${done ? 'Marcar como no leído' : 'Marcar como leído'}" title="${done ? 'Marcar como no leído' : 'Marcar como leído'}" style="${done ? 'color:var(--ok)' : ''}">${ICON.check}</button></div>`;
-    }).join('')}</div>` : `<div class="empty"><h3>No hay capítulos en español</h3>Esta serie aún no tiene capítulos traducidos al español en esta fuente.</div>`;
+    }).join('')}</div>` : `<div class="empty"><h3>No hay capítulos en los idiomas elegidos</h3>Esta serie no tiene capítulos en ${esc((settingsCache?.languages || ['es-la', 'es']).map(langName).join(', ').toLowerCase())}. Puedes activar otro idioma en Ajustes.<br><a class="btn" href="#/settings">Ir a Ajustes</a></div>`;
   };
   const refreshStates = () => chapters.forEach(c => { const el = view.querySelector(`[data-row="${CSS.escape(c.id)}"] [data-dl-state]`); if (el) el.innerHTML = dlIcons(c); });
   drawChaps();
@@ -625,8 +661,11 @@ async function viewSeries([src, id]) {
     const c = chapters.find(c => c.id === b.dataset.mark);
     mark([c.id], !c.progress?.done).catch(err => toast(err.message));
   });
-  $('#markall').onclick = () => mark(chapters.map(c => c.id), true).catch(err => toast(err.message));
-  $('#dl').onclick = () => openDownloadSheet({ src, id, s, chapters, onStart: () => poll() });
+  $('#markall').onclick = () => mark(readable.map(c => c.id), true).catch(err => toast(err.message));
+  $('#dl').onclick = () => {
+    if (!readable.length) { toast('Esta serie solo tiene capítulos en sitios oficiales; no se pueden descargar.'); return; }
+    openDownloadSheet({ src, id, s, chapters: readable, onStart: () => poll() });
+  };
 
   // Seguimiento del progreso mientras haya descargas activas
   let timer = null;
@@ -867,6 +906,12 @@ async function viewSettings() {
       <div class="setting"><label for="theme">Tema</label><select id="theme">${[['light', 'Claro'], ['dark', 'Oscuro'], ['system', 'Automático']].map(([v, l]) => `<option value="${v}" ${theme === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       <div class="setting"><label for="bgc">Fondo del lector</label><select id="bgc">${[['theme', 'Según el tema'], ['black', 'Negro'], ['white', 'Blanco']].map(([v, l]) => `<option value="${v}" ${(s.background || 'theme') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     </div>
+    <h2>Sinopsis</h2>
+    <div class="rows">
+      <div class="setting"><label for="tr">Traducir sinopsis al español automáticamente</label><input type="checkbox" id="tr" ${s.translate !== false ? 'checked' : ''}></div>
+      <div class="setting" style="flex-wrap:wrap"><label for="tre" style="flex:1 1 220px">Correo para ampliar el límite de traducción (opcional)<br><span class="muted small">Sin correo: unas 10 sinopsis al día. Con correo: unas 100. Lo usa solo el servicio MyMemory.</span></label>
+        <input class="input" id="tre" type="email" inputmode="email" autocomplete="email" placeholder="tucorreo@ejemplo.com" value="${esc(s.translateEmail || '')}" style="max-width:280px"></div>
+    </div>
     <h2>Idioma de los capítulos (MangaDex)</h2>
     <div class="rows">${ck('languages', 'es-la', 'Español latinoamericano')}${ck('languages', 'es', 'Español de España')}${ck('languages', 'en', 'Inglés <span class="muted small">— mucho más catálogo, sobre todo cómics</span>')}</div>
     <h2>Clasificación de contenido</h2>
@@ -885,6 +930,10 @@ async function viewSettings() {
     <div class="rows"><div class="setting"><div class="grow"><div>Carpeta de la biblioteca</div><div class="muted small" style="word-break:break-all">${esc(s.libraryDir || '')}</div>
       <div class="muted small">Formatos: CBZ, CBR, ZIP, RAR, PDF, EPUB y carpetas de imágenes. Una subcarpeta por serie.</div></div>
       <button class="btn" id="rescan">Volver a escanear</button></div></div>`}
+    <h2>Diagnóstico</h2>
+    <div class="rows"><div class="setting"><div class="grow"><div>Registro de errores</div><div class="muted small" id="diag-count"></div></div>
+      <button class="btn" id="diag-show">Ver</button></div></div>
+    <div id="diag" hidden style="margin-top:8px"></div>
     <h2>Almacenamiento</h2>
     <div class="rows"><div class="setting"><label>${STANDALONE ? 'Caché de portadas' : 'Caché de imágenes en la computadora'}</label><button class="btn" id="cache">Vaciar caché</button></div></div>`);
   $('#back').onclick = () => { location.hash = '#/more'; };
@@ -903,6 +952,27 @@ async function viewSettings() {
     const rm = { ...s.readerMode }; view.querySelectorAll('[data-mode]').forEach(x => rm[x.dataset.mode] = x.value); s.readerMode = rm; save({ readerMode: rm });
   });
   $('#dp').onchange = e => save({ doublePage: e.target.checked });
+  $('#tr').onchange = e => save({ translate: e.target.checked });
+  $('#tre').addEventListener('change', e => {
+    const v = e.target.value.trim();
+    if (v && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) { toast('Escribe un correo válido o déjalo vacío'); e.target.classList.add('invalid'); return; }
+    e.target.classList.remove('invalid'); save({ translateEmail: v });
+  });
+  const diagCount = () => { const n = readLog().length; $('#diag-count').textContent = n ? `${n} error(es) recientes` : 'Sin errores registrados'; };
+  diagCount();
+  $('#diag-show').onclick = () => {
+    const box = $('#diag'), log = readLog();
+    box.hidden = !box.hidden;
+    if (box.hidden) return;
+    box.innerHTML = log.length ? `<div class="rows">${log.map(x => `<div class="row"><div class="grow"><div class="small">${esc(x.where)}</div><div class="muted small" style="word-break:break-word">${esc(x.msg)}</div><div class="muted small">${new Date(x.at).toLocaleString('es-MX')}</div></div></div>`).join('')}</div>
+      <div class="actions"><button class="btn" id="diag-copy">Copiar registro</button><button class="btn danger" id="diag-clear">Borrar registro</button></div>`
+      : '<p class="muted">No hay errores registrados.</p>';
+    $('#diag-copy')?.addEventListener('click', async () => {
+      const txt = log.map(x => `${new Date(x.at).toISOString()} | ${x.where} | ${x.msg}`).join('\n');
+      try { await navigator.clipboard.writeText(txt); toast('Registro copiado'); } catch { toast('No se pudo copiar'); }
+    });
+    $('#diag-clear')?.addEventListener('click', () => { clearLog(); box.hidden = true; diagCount(); toast('Registro borrado'); });
+  };
   $('#ds').onchange = e => save({ dataSaver: e.target.checked });
   $('#bgc').onchange = e => save({ background: e.target.value });
   $('#imp')?.addEventListener('change', async e => {

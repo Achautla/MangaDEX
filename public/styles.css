@@ -250,3 +250,22 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
 body.welcoming .tabs { display: none; }
 body.welcoming main { padding-bottom: 48px; }
 @media (min-width: 900px) { body.welcoming main { padding-left: 32px; } }
+
+/* ---------- Idiomas ---------- */
+.cover .badge.lang { top: auto; bottom: 6px; left: 6px; background: var(--accent); color: #fff; font-weight: 700; letter-spacing: .03em; }
+.chip.langchip { cursor: default; background: var(--on-bg); border-color: var(--on-bd); color: var(--on-fg); font-weight: 600; }
+.status.lang { background: var(--on-bg); color: var(--on-fg); font-weight: 600; margin-right: 4px; }
+.desc-note { margin: -4px 0 8px; }
+.linkbtn { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
+
+/* ---------- Carga con el logo ---------- */
+.cover { background: var(--surface-2) url(/brand/logo-256.png) center / 38% no-repeat; }
+.row img.thumb { background: var(--surface-2) url(/brand/logo-256.png) center / 60% no-repeat; }
+.loading-logo { width: 88px !important; height: 88px !important; max-width: none !important; max-height: none !important; border-radius: 20px; opacity: .65; animation: logo-pulse 1.4s ease-in-out infinite; object-fit: contain; }
+.reader .msg .loading-logo { display: block; margin: 40vh auto 0; }
+.reader.webtoon .pg .loading-logo { display: block; margin: 0 auto; }
+@keyframes logo-pulse { 50% { opacity: .3; transform: scale(.93); } }
+.pg-error { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 32px 16px; color: #ccc; text-align: center; }
+.reader.white .pg-error { color: #333; }
+.pg-error img { width: 64px; height: 64px; border-radius: 14px; filter: grayscale(1); opacity: .6; }
+.reader.webtoon .pg-error { min-height: 50vh; justify-content: center; }

@@ -19,6 +19,20 @@ async function getBackend() {
   return backend;
 }
 
+// ---------- Registro de errores (Ajustes → Diagnóstico) ----------
+const LOG_KEY = 'diagLog';
+export function logError(where, err) {
+  try {
+    const log = JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
+    log.unshift({ at: Date.now(), where: String(where).slice(0, 120), msg: String(err?.message || err).slice(0, 300) });
+    localStorage.setItem(LOG_KEY, JSON.stringify(log.slice(0, 60)));
+  } catch {}
+}
+export const readLog = () => { try { return JSON.parse(localStorage.getItem(LOG_KEY) || '[]'); } catch { return []; } };
+export const clearLog = () => localStorage.removeItem(LOG_KEY);
+window.addEventListener('error', e => { if (e.message) logError('Error de la app', `${e.message} (${(e.filename || '').split('/').pop()}:${e.lineno})`); });
+window.addEventListener('unhandledrejection', e => logError('Promesa sin manejar', e.reason));
+
 // ---------- HTTP nativo ----------
 const UA = 'LectorPersonal/1.0 (uso personal)';
 // Devuelve un objeto parecido a Response; en el APK usa CapacitorHttp (nativo), en el navegador fetch.

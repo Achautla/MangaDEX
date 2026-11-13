@@ -4,6 +4,7 @@
 //  - "Mis archivos": CBZ/CBR/PDF/EPUB importados, guardados en IndexedDB.
 import { createMangaDex } from '../shared/sources/mangadex.js';
 import { createArchive } from '../shared/sources/archive.js';
+import { createTranslator } from '../shared/translate.js';
 import { nativeFetch } from '../platform.js';
 
 const DL_CACHE = 'lector-descargas';
@@ -106,7 +107,7 @@ async function readComicInfo(blob, kind) {
   if (!xml) return null;
   const doc = new DOMParser().parseFromString(xml, 'application/xml');
   const get = t => doc.getElementsByTagName(t)[0]?.textContent?.trim() || '';
-  return { Series: get('Series'), Summary: get('Summary'), Genre: get('Genre'), Writer: get('Writer'), Penciller: get('Penciller'), Manga: get('Manga'), Format: get('Format'), Number: get('Number') };
+  return { Series: get('Series'), Summary: get('Summary'), Genre: get('Genre'), Writer: get('Writer'), Penciller: get('Penciller'), Manga: get('Manga'), Format: get('Format'), Number: get('Number'), LanguageISO: get('LanguageISO') };
 }
 
 export async function importFiles(fileList, onProgress) {
@@ -121,6 +122,7 @@ export async function importFiles(fileList, onProgress) {
       name: file.name, kind, blob: file, size: file.size, addedAt: Date.now(),
       seriesId: slug(seriesTitle), seriesTitle,
       number: info?.Number || chapterNumber(file.name),
+      lang: (info?.LanguageISO || '').toLowerCase() || null,
       summary: info?.Summary || '', genres: (info?.Genre || '').split(/[,;]/).map(x => x.trim()).filter(Boolean),
       authors: (info?.Writer || '').split(',').map(x => x.trim()).filter(Boolean),
       type: kind === 'epub' ? 'libro' : /webtoon|long strip/i.test(info?.Format || '') ? 'manhwa' : /yes/i.test(info?.Manga || '') ? 'manga' : 'cómic',
@@ -150,8 +152,9 @@ const localSeries = async () => {
       authors: [...new Set(files.flatMap(x => x.authors))], artists: [], status: null,
       type: files.every(x => x.kind === 'epub') ? 'libro' : files.find(x => x.type !== 'cómic')?.type || 'cómic',
       demographic: null, genres: genres.map(g => ({ id: g, name: g })), contentRating: 'safe', year: null,
+      languages: [...new Set(files.map(x => x.lang).filter(Boolean))], descriptionLang: null,
       readingDir: files.some(x => x.type === 'manga') ? 'rtl' : files.some(x => x.type === 'manhwa') ? 'webtoon' : 'ltr',
-      chapters: files.map(x => ({ id: x.id, kind: x.kind, number: x.number, volume: null, title: x.name.replace(/\.[^.]+$/, ''), lang: 'es', group: 'Archivo importado', date: x.addedAt, pages: null })),
+      chapters: files.map(x => ({ id: x.id, kind: x.kind, number: x.number, volume: null, title: x.name.replace(/\.[^.]+$/, ''), lang: x.lang || null, group: 'Archivo importado', date: x.addedAt, pages: null })),
       addedAt: Math.max(...files.map(x => x.addedAt)),
     };
   }).sort((a, b) => collator.compare(a.title, b.title));
@@ -218,6 +221,22 @@ function openArchive(f) {
 const mimeOf = n => { const e = n.split('.').pop().toLowerCase(); return e === 'jpg' ? 'image/jpeg' : `image/${e}`; };
 
 const sources = { mangadex, archive, local };
+
+// Traducciones guardadas en el teléfono
+let tcache; try { tcache = JSON.parse(localStorage.getItem('translations') || '{}'); } catch { tcache = {}; }
+const translator = createTranslator({
+  base: window.TRANSLATE_API || undefined,
+  fetch: (url, opts = {}) => nativeFetch(url, { headers: opts.headers, responseType: 'json' }),
+  email: () => db.settings.translateEmail || '',
+  cache: {
+    get: k => tcache[k],
+    set: (k, v) => {
+      tcache[k] = v;
+      const keys = Object.keys(tcache); if (keys.length > 1500) keys.slice(0, keys.length - 1500).forEach(x => delete tcache[x]);
+      try { localStorage.setItem('translations', JSON.stringify(tcache)); } catch {}
+    },
+  },
+});
 const src = id => { const s = sources[id]; if (!s) throw new HttpError(404, 'Fuente desconocida'); return s; };
 
 // ---------- Copias para leer sin conexión ----------
@@ -241,10 +260,13 @@ export async function handleApi(path, opts = {}) {
     switch (parts[0]) {
       case 'settings':
         if (method === 'PUT') {
-          for (const k of ['languages', 'contentRating', 'dataSaver', 'readerMode', 'doublePage', 'background', 'theme', 'profile']) if (k in body) db.settings[k] = body[k];
+          for (const k of ['languages', 'contentRating', 'dataSaver', 'readerMode', 'doublePage', 'background', 'theme', 'profile', 'translate', 'translateEmail']) if (k in body) db.settings[k] = body[k];
           save();
         }
         return { ...db.settings, libraryDir: null, standalone: true };
+      case 'translate':
+        if (db.settings.translate === false) return { text: body.text || '', translated: false };
+        return translator.translate(String(body.text || ''), body.from || 'autodetect');
       case 'sources':
         return [
           { id: 'mangadex', name: 'MangaDex', description: 'Catálogo en línea en español', capabilities: { popular: true, latest: true, search: true, filters: true } },
