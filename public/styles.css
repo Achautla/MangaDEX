@@ -150,12 +150,18 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
 .reader { position: fixed; inset: 0; background: #000; overflow: hidden; touch-action: manipulation; }
 .reader.white { background: #fff; }
 .reader .stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 0; }
+.reader.paged .stage { overflow: hidden; }
+.reader.paged .stage .zoom { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; transform-origin: 0 0; will-change: transform; }
 .reader.paged .stage img, .reader.paged .stage canvas { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; -webkit-user-drag: none; }
-.reader.paged.double .stage > * { max-width: 50%; }
-.reader.fit-width.paged .stage { overflow-y: auto; align-items: flex-start; }
+.reader.paged.double .stage .zoom > * { max-width: 50%; }
+.reader .zones { touch-action: none; }
+.reader .zoomctl { display: inline-flex; gap: 4px; align-items: center; }
+
+.reader.fit-width.paged .stage { align-items: flex-start; }
+.reader.fit-width.paged .stage .zoom { height: auto; align-items: flex-start; }
 .reader.fit-width.paged .stage img, .reader.fit-width.paged .stage canvas { max-height: none; width: 100%; }
-.reader.webtoon .stage { display: block; overflow-y: auto; overscroll-behavior: contain; }
-.reader.webtoon .pg { max-width: 800px; margin: 0 auto; min-height: 60vh; display: flex; align-items: center; justify-content: center; }
+.reader.webtoon .stage { display: block; overflow: auto; overscroll-behavior: contain; touch-action: pan-x pan-y; }
+.reader.webtoon .pg { width: calc(100% * var(--wz, 1)); max-width: calc(800px * var(--wz, 1)); margin: 0 auto; min-height: 60vh; display: flex; align-items: center; justify-content: center; }
 .reader.webtoon .pg.loaded { min-height: 0; }
 .reader.webtoon .pg img, .reader.webtoon .pg canvas { width: 100%; height: auto; }
 .reader .epub { position: absolute; inset: 0; background: #fbfaf7; }

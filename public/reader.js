@@ -30,6 +30,11 @@ export async function openReader(root, { src, seriesId, chapterId }) {
         <button class="btn" data-act="mode" title="Cambiar modo de lectura"></button>
         <button class="btn" data-act="double" title="Doble página">Doble página</button>
         <button class="btn" data-act="fit" title="Ajuste de la imagen">Ajustar: alto</button>
+        <span class="zoomctl" role="group" aria-label="Zoom">
+          <button class="btn icon" data-act="zout" aria-label="Alejar" title="Alejar">−</button>
+          <button class="btn" data-act="zreset" data-ui="zl" title="Restablecer zoom">100%</button>
+          <button class="btn icon" data-act="zin" aria-label="Acercar" title="Acercar">+</button>
+        </span>
       </div>
     </div>
   </div>`;
@@ -193,6 +198,7 @@ export async function openReader(root, { src, seriesId, chapterId }) {
     el.querySelector('[data-act="mode"]').hidden = true;
     el.querySelector('[data-act="double"]').hidden = true;
     el.querySelector('[data-act="fit"]').hidden = true;
+    el.querySelector('.zoomctl').hidden = true;
     stage.innerHTML = '<div class="epub"></div>';
     const blob = await getBlob(url).catch(() => { throw new Error('No se pudo abrir el libro'); });
     const book = window.ePub(await blob.arrayBuffer());
@@ -229,6 +235,7 @@ export async function openReader(root, { src, seriesId, chapterId }) {
     el.querySelector('[data-act="double"]').classList.toggle('primary', double);
     el.querySelector('[data-act="fit"]').hidden = mode === 'webtoon';
     el.querySelector('[data-act="fit"]').textContent = fitWidth ? 'Ajustar: ancho' : 'Ajustar: alto';
+    setWz(1);
     if (mode === 'webtoon') buildWebtoon(); else showPage(page);
   }
 
@@ -243,13 +250,20 @@ export async function openReader(root, { src, seriesId, chapterId }) {
     const els = [doc.render(page)];
     if (double && page + 1 < doc.count) els.push(doc.render(page + 1));
     if (mode === 'rtl') els.reverse();
-    stage.replaceChildren(...els);
+    const wrap = document.createElement('div');
+    wrap.className = 'zoom';
+    wrap.append(...els);
+    stage.replaceChildren(wrap);
+    resetZoom();
+    // al cargar la imagen cambia su tamaño: recalcular límites del desplazamiento
+    els.forEach(m => m.addEventListener?.('load', () => applyZoom(), { once: true }));
     doc.preload(page + step - 1);
     updateCounter();
     saveProgress();
   }
 
   function endCard() {
+    resetZoom();
     const n = neighbor(1);
     stage.innerHTML = `<div class="end"><h3>Terminaste ${esc(chapterLabel(chapters[chIdx]))}</h3>
       ${n != null ? `<button class="btn primary" data-next>Siguiente: ${esc(chapterLabel(chapters[n]))}</button>` : '<p class="muted">No hay más capítulos en español por ahora.</p>'}
@@ -312,29 +326,144 @@ export async function openReader(root, { src, seriesId, chapterId }) {
     location.hash = `#/series/${src}/${encodeURIComponent(seriesId)}`;
   }
 
-  el.querySelector('.zones').addEventListener('click', e => {
+  // ----- Zoom -----
+  // Modo página: pellizcar, doble toque al centro, arrastrar para mover; botones − / +; Ctrl+rueda en PC.
+  // Modo vertical: pellizcar o doble toque para ensanchar las páginas (se desplaza en ambos ejes).
+  const Z = { s: 1, x: 0, y: 0 };
+  let wz = 1;
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const zoomWrap = () => stage.querySelector(':scope > .zoom');
+  const zoomLabel = () => { const l = ui('zl'); if (l) l.textContent = `${Math.round((mode === 'webtoon' ? wz : Z.s) * 100)}%`; };
+  function applyZoom() {
+    const w = zoomWrap(); if (!w) return;
+    const W = stage.clientWidth, H = stage.clientHeight, h = w.offsetHeight;
+    Z.s = clamp(Z.s, 1, 5);
+    Z.x = clamp(Z.x, Math.min(0, W - W * Z.s), 0);
+    Z.y = clamp(Z.y, Math.min(0, H - h * Z.s), 0);
+    w.style.transform = `translate(${Z.x}px, ${Z.y}px) scale(${Z.s})`;
+    el.classList.toggle('zoomed', Z.s > 1.01);
+    zoomLabel();
+  }
+  function resetZoom() { Z.s = 1; Z.x = 0; Z.y = 0; applyZoom(); zoomLabel(); }
+  function zoomAt(ns, cx, cy) {
+    const r = stage.getBoundingClientRect();
+    const px = (cx - r.left - Z.x) / Z.s, py = (cy - r.top - Z.y) / Z.s;
+    Z.s = clamp(ns, 1, 5);
+    Z.x = cx - r.left - px * Z.s; Z.y = cy - r.top - py * Z.s;
+    applyZoom();
+  }
+  function setWz(nz, cx, cy) {
+    const old = wz; wz = clamp(nz, 1, 3);
+    if (mode !== 'webtoon') { stage.style.removeProperty('--wz'); zoomLabel(); return; }
+    const r = stage.getBoundingClientRect();
+    const mx = (cx ?? r.left + r.width / 2) - r.left, my = (cy ?? r.top + r.height / 2) - r.top;
+    const fx = (stage.scrollLeft + mx) / old, fy = (stage.scrollTop + my) / old;
+    stage.style.setProperty('--wz', wz);
+    stage.scrollLeft = fx * wz - mx;
+    stage.scrollTop = fy * wz - my;
+    zoomLabel();
+  }
+  const centerOf = () => { const r = stage.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; };
+
+  // Toques en modo página (capa .zones encima de la imagen)
+  const zones = el.querySelector('.zones');
+  let g = null, moved = false;
+  const dist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  const mid = (a, b) => [(a.clientX + b.clientX) / 2, (a.clientY + b.clientY) / 2];
+  zones.addEventListener('touchstart', e => {
+    const t = e.touches;
+    if (t.length === 2) {
+      const [mx, my] = mid(t[0], t[1]);
+      g = { kind: 'pinch', d0: dist(t[0], t[1]), s0: Z.s, x0: Z.x, y0: Z.y, mx, my };
+      moved = true;
+    } else if (t.length === 1 && (!g || g.kind !== 'pinch')) {
+      g = { kind: 'one', sx: t[0].clientX, sy: t[0].clientY, zx: Z.x, zy: Z.y };
+      moved = false;
+    }
+  }, { passive: true });
+  zones.addEventListener('touchmove', e => {
+    if (!g) return;
+    const t = e.touches;
+    if (g.kind === 'pinch' && t.length >= 2) {
+      e.preventDefault();
+      const r = stage.getBoundingClientRect();
+      const [mx, my] = mid(t[0], t[1]);
+      const ns = clamp(g.s0 * dist(t[0], t[1]) / g.d0, 1, 5);
+      const px = (g.mx - r.left - g.x0) / g.s0, py = (g.my - r.top - g.y0) / g.s0;
+      Z.s = ns; Z.x = mx - r.left - px * ns; Z.y = my - r.top - py * ns;
+      applyZoom();
+    } else if (g.kind === 'one' && t.length === 1) {
+      const dx = t[0].clientX - g.sx, dy = t[0].clientY - g.sy;
+      if (Math.abs(dx) > 10 || Math.abs(dy) > 10) moved = true;
+      const w = zoomWrap();
+      const canPan = Z.s > 1.01 || (w && w.offsetHeight > stage.clientHeight + 2);
+      if (canPan) { e.preventDefault(); Z.x = g.zx + dx; Z.y = g.zy + dy; applyZoom(); g.panned = true; }
+    }
+  }, { passive: false });
+  zones.addEventListener('touchend', e => {
+    if (!g) return;
+    if (g.kind === 'one' && !g.panned && e.changedTouches.length) {
+      const dx = e.changedTouches[0].clientX - g.sx, dy = e.changedTouches[0].clientY - g.sy;
+      if (Math.abs(dx) >= 50 && Math.abs(dx) > Math.abs(dy)) { go((dx < 0) !== (mode === 'rtl') ? 1 : -1); }
+    }
+    if (e.touches.length === 0) { g = null; setTimeout(() => { moved = false; }, 400); }
+    else if (g?.kind === 'pinch' && e.touches.length === 1) g = null; // terminar el pellizco limpio
+  });
+  // Toques: lados = pasar página; centro = barras (doble toque = zoom)
+  let lastCenter = 0, centerTimer = null;
+  zones.addEventListener('click', e => {
+    if (moved) { moved = false; return; }
     const z = e.target.dataset.z;
-    if (z === 'center') return toggleUI();
+    if (z === 'center') {
+      const now = Date.now();
+      if (now - lastCenter < 300) {
+        clearTimeout(centerTimer); lastCenter = 0;
+        if (Z.s > 1.01) resetZoom(); else zoomAt(2.5, e.clientX, e.clientY);
+        return;
+      }
+      lastCenter = now;
+      centerTimer = setTimeout(toggleUI, 280);
+      return;
+    }
     if (!el.classList.contains('hide-ui')) { el.classList.add('hide-ui'); return; }
     const forward = (z === 'right') !== (mode === 'rtl');
     go(forward ? 1 : -1);
   });
-  // tocar en modo webtoon: alterna barras si no hubo desplazamiento
-  let downY = 0;
+  // PC: Ctrl + rueda = zoom; rueda sola desplaza si la página no cabe
+  el.addEventListener('wheel', e => {
+    if (epub) return;
+    if (e.ctrlKey) {
+      e.preventDefault();
+      const f = Math.exp(-e.deltaY / 300);
+      if (mode === 'webtoon') setWz(wz * f, e.clientX, e.clientY); else zoomAt(Z.s * f, e.clientX, e.clientY);
+    } else if (mode !== 'webtoon' && zoomWrap()) {
+      const w = zoomWrap();
+      if (Z.s > 1.01 || w.offsetHeight > stage.clientHeight + 2) { e.preventDefault(); Z.y -= e.deltaY; Z.x -= e.deltaX; applyZoom(); }
+    }
+  }, { passive: false });
+
+  // Modo vertical: pellizcar sobre la tira, doble toque, y tocar para barras
+  let wg = null, downY = 0, lastWT = 0, wTimer = null;
+  stage.addEventListener('touchstart', e => {
+    if (mode !== 'webtoon' || e.touches.length !== 2) return;
+    const [mx, my] = mid(e.touches[0], e.touches[1]);
+    wg = { d0: dist(e.touches[0], e.touches[1]), z0: wz, mx, my };
+  }, { passive: true });
+  stage.addEventListener('touchmove', e => {
+    if (!wg || e.touches.length < 2) return;
+    e.preventDefault();
+    setWz(wg.z0 * dist(e.touches[0], e.touches[1]) / wg.d0, wg.mx, wg.my);
+  }, { passive: false });
+  stage.addEventListener('touchend', e => { if (e.touches.length < 2) wg = null; });
   stage.addEventListener('pointerdown', e => { downY = e.clientY; });
   stage.addEventListener('click', e => {
     if (mode !== 'webtoon' || epub || Math.abs(e.clientY - downY) > 8 || e.target.closest('button')) return;
-    toggleUI();
+    const now = Date.now();
+    if (now - lastWT < 300) { clearTimeout(wTimer); lastWT = 0; setWz(wz > 1.01 ? 1 : 2, e.clientX, e.clientY); return; }
+    lastWT = now;
+    wTimer = setTimeout(toggleUI, 280);
   });
-  // deslizar en modo página
-  let sx = 0, sy = 0;
-  el.querySelector('.zones').addEventListener('touchstart', e => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
-  el.querySelector('.zones').addEventListener('touchend', e => {
-    const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
-    if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy)) return;
-    const forward = (dx < 0) !== (mode === 'rtl');
-    go(forward ? 1 : -1);
-  });
+
   const onKey = e => {
     if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
     const k = e.key;
@@ -365,6 +494,12 @@ export async function openReader(root, { src, seriesId, chapterId }) {
     }
     if (act === 'double') { double = !double; layout(); }
     if (act === 'fit') { fitWidth = !fitWidth; layout(); }
+    if (act === 'zin' || act === 'zout' || act === 'zreset') {
+      const f = act === 'zin' ? 1.5 : act === 'zout' ? 1 / 1.5 : 0;
+      const [cx, cy] = centerOf();
+      if (mode === 'webtoon') setWz(f ? wz * f : 1, cx, cy);
+      else if (f) zoomAt(Z.s * f, cx, cy); else resetZoom();
+    }
   });
   range.addEventListener('input', () => {
     if (!doc || epub) return;
