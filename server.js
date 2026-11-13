@@ -203,6 +203,28 @@ app.get('/api/img', wrap(async (req, res) => {
   res.set('Content-Type', type).set('Cache-Control', 'public, max-age=604800').send(buf);
 }));
 
+// ---------- Proxy de imágenes de ComicBooks (extraídas de CBZ) ----------
+app.get('/api/comicbooks/page/:comicId/:index', wrap(async (req, res) => {
+  const { comicId, index } = req.params;
+  const extractPath = path.join(CACHE_DIR, comicId);
+  
+  try {
+    const files = (await fsp.readdir(extractPath))
+      .filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f))
+      .sort();
+    
+    const file = files[Number(index)];
+    if (!file) throw new HttpError(404, 'Página no encontrada');
+    
+    const filePath = path.join(extractPath, file);
+    const ext = path.extname(file).slice(1).toLowerCase().replace('jpg', 'jpeg');
+    res.set('Content-Type', `image/${ext}`).set('Cache-Control', 'public, max-age=86400');
+    res.sendFile(filePath);
+  } catch (e) {
+    throw new HttpError(404, 'Imagen no disponible');
+  }
+}));
+
 // ---------- Archivos locales ----------
 const sendImage = (res, img) => {
   const ext = path.extname(img.name).slice(1).toLowerCase().replace('jpg', 'jpeg');
