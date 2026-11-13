@@ -15,4 +15,9 @@ const gradle = path.join(root, 'android', 'app', 'build.gradle');
 let g = await fs.readFile(gradle, 'utf8');
 g = g.replace(/versionCode \d+/, `versionCode ${code}`).replace(/versionName "[^"]*"/, `versionName "1.0.${run}"`);
 await fs.writeFile(gradle, g);
+// Permitir servidores http:// de la red de casa (Komga, Kavita, Calibre-Web en tu PC).
+const manifest = path.join(root, 'android', 'app', 'src', 'main', 'AndroidManifest.xml');
+let m = await fs.readFile(manifest, 'utf8');
+if (!/usesCleartextTraffic/.test(m)) m = m.replace(/<application\b/, '<application android:usesCleartextTraffic="true"');
+await fs.writeFile(manifest, m);
 console.log(`✔ Recursos de Android copiados (versión 1.0.${run})`);

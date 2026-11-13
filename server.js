@@ -12,11 +12,13 @@ import { createMangaDex } from './src/sources/mangadex.js';
 import { createLocal } from './src/sources/local.js';
 import { createDownloads } from './src/downloads.js';
 import { createArchive } from './src/sources/archive.js';
+import { createLibres } from './src/sources/peppercarrot.js';
 import { createTranslator } from './src/translate.js';
-import { createComicBooks, CACHE_DIR } from './src/sources/comicbooks.js';
+import { createOpds } from './src/sources/opds.js';
+import { createMangaPlus, decryptImage } from './src/sources/mangaplus.js';
+import { openArchive } from './src/archive.js';
 import { ZipArchive } from 'archiver';
 import { HttpError } from './src/util.js';
-import { createMarmota } from './src/sources/marmota.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -29,7 +31,7 @@ const config = {
   dataDir: process.env.DATA_DIR || fileCfg.dataDir || path.join(__dirname, 'datos'),
   mangadexApi: process.env.MANGADEX_API || fileCfg.mangadexApi || 'https://api.mangadex.org',
   mangadexUploads: process.env.MANGADEX_UPLOADS || fileCfg.mangadexUploads || 'https://uploads.mangadex.org',
-  mangadexImageHosts: (process.env.MANGADEX_IMAGE_HOSTS || fileCfg.mangadexImageHosts || 'mangadex.network,mangadex.org,archive.org').split(',').map(s => s.trim()),
+  mangadexImageHosts: (process.env.MANGADEX_IMAGE_HOSTS || fileCfg.mangadexImageHosts || 'mangadex.network,mangadex.org,archive.org,peppercarrot.com').split(',').map(s => s.trim()),
   mangadexReport: process.env.MANGADEX_REPORT !== '0',
   imageCacheMB: Number(process.env.IMAGE_CACHE_MB || fileCfg.imageCacheMB || 1024),
 };
@@ -38,10 +40,50 @@ const store = createStore(path.join(config.dataDir, 'db.json'));
 const local = createLocal(config);
 const mangadex = createMangaDex(config, store.settings);
 const archive = createArchive({ archiveBase: process.env.ARCHIVE_BASE, iiifBase: process.env.IIIF_BASE });
-const comicbooks = createComicBooks(); // <--- NUEVA LÍNEA
-const sources = { mangadex, archive, local, comicbooks }; // <--- MODIFICADO
-const marmota = createMarmota();
-const sources = { mangadex, archive, local, comicbooks, marmota }; // Añade 'marmota'
+const mangaplus = createMangaPlus({
+  api: process.env.MANGAPLUS_API || undefined,
+  getSettings: store.settings,
+  fetchBytes: async (url, headers) => {
+    const r = await fetch(url, { headers: { 'User-Agent': 'LectorPersonal/1.0', ...headers }, signal: AbortSignal.timeout(20000) });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return new Uint8Array(await r.arrayBuffer());
+  },
+});
+const libres = createLibres({ base: process.env.PEPPER_BASE || undefined, getSettings: store.settings });
+const sources = { mangadex, mangaplus, archive, libres, local };
+
+// ---------- Catálogos OPDS (Ajustes → Catálogos OPDS) ----------
+const opdsDir = path.join(config.dataDir, 'cache-opds');
+fs.mkdirSync(opdsDir, { recursive: true });
+const opdsFiles = new Map(); // url -> Promise<ruta en disco>
+async function opdsDownload(cat, url) {
+  if (opdsFiles.has(url)) return opdsFiles.get(url);
+  const abs = path.join(opdsDir, crypto.createHash('sha1').update(url).digest('hex'));
+  const p = (async () => {
+    try { await fsp.access(abs); return abs; } catch {}
+    const r = await cat.fetchResource(url);
+    if (!r.ok) throw new HttpError(502, `El catálogo respondió ${r.status}`);
+    await fsp.writeFile(abs + '.part', Buffer.from(await r.arrayBuffer()));
+    await fsp.rename(abs + '.part', abs);
+    return abs;
+  })();
+  p.catch(() => opdsFiles.delete(url));
+  opdsFiles.set(url, p);
+  return p;
+}
+let opdsKey = '';
+function syncOpds() {
+  const cats = store.settings().opdsCatalogs || [];
+  const key = JSON.stringify(cats);
+  if (key === opdsKey) return;
+  opdsKey = key;
+  for (const k of Object.keys(sources)) if (k.startsWith('opds-')) delete sources[k];
+  for (const c of cats) {
+    if (!c?.id || !c.url) continue;
+    sources[c.id] = createOpds({ catalog: c, openRemote: async (sid, url, fmt) => (await openArchive(await opdsDownload(sources[sid], url), fmt)).names.length });
+  }
+}
+syncOpds();
 const downloads = createDownloads({ config, store, sources });
 store.db.translations ||= {};
 const translator = createTranslator({
@@ -63,10 +105,11 @@ const app = express();
 app.use(express.json({ limit: '2mb' }));
 
 const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-const src = id => { const s = sources[id]; if (!s) throw new HttpError(404, 'Fuente desconocida'); return s; };
+const src = id => { syncOpds(); const s = sources[id]; if (!s) throw new HttpError(404, 'Fuente desconocida'); return s; };
 
 // ---------- Fuentes ----------
 app.get('/api/sources', (req, res) => {
+  syncOpds();
   res.json(Object.values(sources).map(({ id, name, description, capabilities }) => ({ id, name, description, capabilities })));
 });
 
@@ -173,6 +216,42 @@ function zipStream(res, files) {
   zip.finalize();
 }
 
+// ---------- MANGA Plus: imágenes (se descifran aquí) ----------
+app.get('/api/mplus/img', wrap(async (req, res) => {
+  const u = String(req.query.u || ''), k = String(req.query.k || '');
+  let url; try { url = new URL(u); } catch { throw new HttpError(400, 'URL inválida'); }
+  if (!/(^|\.)(tokyo-cdn\.com|shueisha\.co\.jp)$/.test(url.hostname) && !process.env.MANGAPLUS_API) throw new HttpError(403, 'Host no permitido');
+  if (k && !/^[0-9a-f]+$/i.test(k)) throw new HttpError(400, 'Clave inválida');
+  let r;
+  try { r = await fetch(u, { headers: { 'User-Agent': 'LectorPersonal/1.0', Referer: 'https://mangaplus.shueisha.co.jp/' }, signal: AbortSignal.timeout(20000) }); }
+  catch { throw new HttpError(502, 'No se pudo descargar la imagen'); }
+  if (!r.ok) throw new HttpError(502, `Imagen: ${r.status}`);
+  const out = decryptImage(new Uint8Array(await r.arrayBuffer()), k);
+  res.set('Content-Type', k ? 'image/jpeg' : (r.headers.get('content-type') || 'image/jpeg')).set('Cache-Control', 'public, max-age=86400').send(Buffer.from(out));
+}));
+
+// ---------- OPDS: portadas, páginas y archivos (con el usuario/contraseña del catálogo) ----------
+app.get('/api/opds/res', wrap(async (req, res) => {
+  const cat = src(String(req.query.c || ''));
+  if (!cat.fetchResource) throw new HttpError(400, 'No es un catálogo OPDS');
+  const u = String(req.query.u || ''), kind = req.query.k;
+  try { new URL(u); } catch { throw new HttpError(400, 'URL inválida'); }
+  if (kind === 'arc') {
+    const fmt = req.query.f === 'rar' ? 'rar' : 'zip';
+    const arc = await openArchive(await opdsDownload(cat, u), fmt);
+    const i = Number(req.query.i) || 0;
+    if (!arc.names[i]) throw new HttpError(404, 'Página no encontrada');
+    return sendImage(res, { data: await arc.read(i), name: arc.names[i] });
+  }
+  if (kind === 'file') {
+    const abs = await opdsDownload(cat, u);
+    return res.type(/\.epub|epub/i.test(u) ? 'application/epub+zip' : 'application/pdf').sendFile(abs);
+  }
+  const r = await cat.fetchResource(u);
+  if (!r.ok) throw new HttpError(502, `Imagen: ${r.status}`);
+  res.set('Content-Type', r.headers.get('content-type') || 'image/jpeg').set('Cache-Control', 'public, max-age=86400').send(Buffer.from(await r.arrayBuffer()));
+}));
+
 // ---------- Proxy de imágenes de MangaDex (con caché en disco) ----------
 app.get('/api/img', wrap(async (req, res) => {
   const u = String(req.query.u || '');
@@ -190,13 +269,17 @@ app.get('/api/img', wrap(async (req, res) => {
     return;
   } catch {}
   const t0 = Date.now();
+  const isPdf = /\.pdf($|\?)/i.test(url.pathname);
+  const get = x => fetch(x, { headers: { 'User-Agent': 'LectorPersonal/1.0' }, signal: AbortSignal.timeout(isPdf ? 180000 : 45000) });
   let r;
-  try {
-    r = await fetch(u, { headers: { 'User-Agent': 'LectorPersonal/1.0' }, signal: AbortSignal.timeout(20000) });
-  } catch {
-    mangadex.report(u, false, 0, Date.now() - t0);
-    throw new HttpError(502, 'No se pudo descargar la imagen');
+  try { r = await get(u); } catch { r = null; }
+  // Plan B (Internet Archive): si el tamaño pedido falla, se pide la imagen original
+  const fb = String(req.query.f || '');
+  if ((!r || !r.ok) && fb) {
+    let fu; try { fu = new URL(fb); } catch {}
+    if (fu && config.mangadexImageHosts.some(h => fu.hostname === h || fu.hostname.endsWith('.' + h))) { try { r = await get(fb); } catch { r = null; } }
   }
+  if (!r) { mangadex.report(u, false, 0, Date.now() - t0); throw new HttpError(502, 'No se pudo descargar la imagen'); }
   if (!r.ok) { mangadex.report(u, false, 0, Date.now() - t0); throw new HttpError(502, `Imagen: ${r.status}`); }
   const buf = Buffer.from(await r.arrayBuffer());
   mangadex.report(u, true, buf.length, Date.now() - t0);
@@ -204,28 +287,6 @@ app.get('/api/img', wrap(async (req, res) => {
   await fsp.mkdir(path.dirname(file), { recursive: true });
   await fsp.writeFile(file, buf); await fsp.writeFile(file + '.type', type);
   res.set('Content-Type', type).set('Cache-Control', 'public, max-age=604800').send(buf);
-}));
-
-// ---------- Proxy de imágenes de ComicBooks (extraídas de CBZ) ----------
-app.get('/api/comicbooks/page/:comicId/:index', wrap(async (req, res) => {
-  const { comicId, index } = req.params;
-  const extractPath = path.join(CACHE_DIR, comicId);
-  
-  try {
-    const files = (await fsp.readdir(extractPath))
-      .filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f))
-      .sort();
-    
-    const file = files[Number(index)];
-    if (!file) throw new HttpError(404, 'Página no encontrada');
-    
-    const filePath = path.join(extractPath, file);
-    const ext = path.extname(file).slice(1).toLowerCase().replace('jpg', 'jpeg');
-    res.set('Content-Type', `image/${ext}`).set('Cache-Control', 'public, max-age=86400');
-    res.sendFile(filePath);
-  } catch (e) {
-    throw new HttpError(404, 'Imagen no disponible');
-  }
 }));
 
 // ---------- Archivos locales ----------
@@ -257,7 +318,7 @@ app.post('/api/library', (req, res) => {
   const key = `${s.source}:${s.id}`;
   store.db.library[key] = {
     ...store.db.library[key],
-    source: s.source, id: s.id, title: s.title, cover: s.cover, type: s.type,
+    source: s.source, id: s.id, title: s.title, cover: s.cover, type: s.type, languages: s.languages || store.db.library[key]?.languages,
     readingDir: s.readingDir, category: s.category || store.db.library[key]?.category || 'General',
     addedAt: store.db.library[key]?.addedAt || Date.now(),
   };
@@ -310,7 +371,7 @@ app.get('/api/updates', wrap(async (req, res) => {
 // ---------- Ajustes ----------
 app.get('/api/settings', (req, res) => res.json({ ...store.settings(), libraryDir: path.resolve(config.libraryDir) }));
 app.put('/api/settings', (req, res) => {
-  const allowed = ['languages', 'contentRating', 'dataSaver', 'readerMode', 'doublePage', 'background', 'theme', 'profile', 'translate', 'translateEmail'];
+  const allowed = ['languages', 'contentRating', 'dataSaver', 'readerMode', 'doublePage', 'background', 'theme', 'profile', 'translate', 'translateEmail', 'opdsCatalogs'];
   for (const k of allowed) if (k in (req.body || {})) store.db.settings[k] = req.body[k];
   store.save(); res.json(store.settings());
 });

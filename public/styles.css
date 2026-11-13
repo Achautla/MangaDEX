@@ -269,3 +269,25 @@ body.welcoming main { padding-bottom: 48px; }
 .reader.white .pg-error { color: #333; }
 .pg-error img { width: 64px; height: 64px; border-radius: 14px; filter: grayscale(1); opacity: .6; }
 .reader.webtoon .pg-error { min-height: 50vh; justify-content: center; }
+
+/* ---------- Descanso visual ---------- */
+.reader .eyecare { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+.reader .eyecare > div { position: absolute; inset: 0; opacity: 0; transition: opacity 250ms var(--ease); }
+.reader .ec-warm { background: #ff9a3c; mix-blend-mode: multiply; }
+.reader .ec-dim { background: #000; }
+.reader.ec-sepia .stage img, .reader.ec-sepia .stage canvas { filter: sepia(.55) contrast(.92); }
+.reader .ec-panel { position: absolute; z-index: 6; left: 12px; right: 12px; bottom: calc(150px + var(--safe-b)); max-width: 420px; margin: 0 auto;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 14px; padding: 8px 16px; box-shadow: 0 8px 30px rgba(0,0,0,.25); }
+.reader .ec-row { display: flex; align-items: center; gap: 12px; min-height: 44px; }
+.reader .ec-row label { flex: 1; }
+.reader .ec-row input[type=range] { flex: 1.2; accent-color: var(--accent); }
+.reader .ec-hint { font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
+.reader.hide-ui .ec-panel { display: none; }
+
+/* Carpetas de catálogos OPDS */
+.card.folder .cover { display: grid; place-items: center; background: var(--surface-2, rgba(127,127,127,.12)); }
+.card.folder .folder-ic { font-size: 48px; line-height: 1; }
+/* Pestañas de fuentes: se desplazan de lado cuando hay muchas */
+.seg[aria-label="Fuente"] { max-width: 100%; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.seg[aria-label="Fuente"]::-webkit-scrollbar { display: none; }
+.seg[aria-label="Fuente"] button { white-space: nowrap; flex: 0 0 auto; }

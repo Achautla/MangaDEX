@@ -35,7 +35,7 @@ export function createArchive(config) {
     if (hit) return hit;
     let res;
     try {
-      res = await limiter.schedule(() => http(url, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: AbortSignal.timeout(25000) }));
+      res = await limiter.schedule(() => http(url, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: AbortSignal.timeout(60000) }));
     } catch {
       throw new HttpError(502, 'No se pudo conectar con Internet Archive. Revisa tu conexión a internet.');
     }
@@ -120,9 +120,12 @@ export function createArchive(config) {
       const imgs = (man.items || []).map(cv => {
         const body = cv.items?.[0]?.items?.[0]?.body;
         const svc = first(body?.service)?.id || first(body?.service)?.['@id'];
-        return svc ? `${svc}/full/1400,/0/default.jpg` : body?.id;
+        // "!1400,2400" = cabe en ese tamaño SIN ampliar: los escaneos suelen medir ~1000 px de ancho
+        // y el servidor de Internet Archive rechaza pedir más ancho que el original.
+        const full = body?.id || (svc && `${svc}/full/max/0/default.jpg`);
+        return svc ? { u: `${svc}/full/!1400,2400/0/default.jpg`, f: full } : full ? { u: full } : null;
       }).filter(Boolean);
-      if (imgs.length) return { kind: 'images', pages: imgs.map(u => ({ url: proxied(u) })) };
+      if (imgs.length) return { kind: 'images', pages: imgs.map(({ u, f }) => ({ url: proxied(u) + (f && f !== u ? `&f=${encodeURIComponent(f)}` : '') })) };
     } catch { /* sin derivado de imágenes: se intenta el PDF */ }
     const meta = await getJson(`${IA}/metadata/${encodeURIComponent(id)}`);
     const pdf = (meta.files || []).find(f => /\.pdf$/i.test(f.name));

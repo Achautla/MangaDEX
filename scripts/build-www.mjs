@@ -19,7 +19,8 @@ await fs.cp(path.join(root, 'public'), out, { recursive: true, filter: src => !s
 await fs.mkdir(path.join(out, 'shared', 'sources'), { recursive: true });
 await fs.copyFile(path.join(root, 'src', 'util.js'), path.join(out, 'shared', 'util.js'));
 await fs.copyFile(path.join(root, 'src', 'translate.js'), path.join(out, 'shared', 'translate.js'));
-for (const f of ['mangadex.js', 'archive.js']) await fs.copyFile(path.join(root, 'src', 'sources', f), path.join(out, 'shared', 'sources', f));
+await fs.copyFile(path.join(root, 'src', 'xml.js'), path.join(out, 'shared', 'xml.js'));
+for (const f of ['mangadex.js', 'archive.js', 'opds.js', 'mangaplus.js', 'peppercarrot.js']) await fs.copyFile(path.join(root, 'src', 'sources', f), path.join(out, 'shared', 'sources', f));
 
 // 3) Librerías
 await fs.mkdir(path.join(out, 'vendor'), { recursive: true });
@@ -41,7 +42,7 @@ await build({
 });
 
 // 4) Modo standalone + Capacitor
-const apiOverride = process.env.MANGADEX_API ? `\nwindow.MANGADEX_API = ${JSON.stringify(process.env.MANGADEX_API)};\nwindow.MANGADEX_UPLOADS = ${JSON.stringify(process.env.MANGADEX_UPLOADS || process.env.MANGADEX_API)};\nwindow.ARCHIVE_BASE = ${JSON.stringify(process.env.ARCHIVE_BASE || 'https://archive.org')};\nwindow.IIIF_BASE = ${JSON.stringify(process.env.IIIF_BASE || 'https://iiif.archive.org')};${process.env.TRANSLATE_API ? `\nwindow.TRANSLATE_API = ${JSON.stringify(process.env.TRANSLATE_API)};` : ''}` : '';
+const apiOverride = process.env.MANGADEX_API ? `\nwindow.MANGADEX_API = ${JSON.stringify(process.env.MANGADEX_API)};\nwindow.MANGADEX_UPLOADS = ${JSON.stringify(process.env.MANGADEX_UPLOADS || process.env.MANGADEX_API)};\nwindow.ARCHIVE_BASE = ${JSON.stringify(process.env.ARCHIVE_BASE || 'https://archive.org')};\nwindow.IIIF_BASE = ${JSON.stringify(process.env.IIIF_BASE || 'https://iiif.archive.org')};${process.env.TRANSLATE_API ? `\nwindow.TRANSLATE_API = ${JSON.stringify(process.env.TRANSLATE_API)};` : ''}${process.env.MANGAPLUS_API ? `\nwindow.MANGAPLUS_API = ${JSON.stringify(process.env.MANGAPLUS_API)};` : ''}${process.env.PEPPER_BASE ? `\nwindow.PEPPER_BASE = ${JSON.stringify(process.env.PEPPER_BASE)};` : ''}` : '';
 await fs.writeFile(path.join(out, 'config.js'), `// Generado por scripts/build-www.mjs\nwindow.APP_MODE = 'standalone';${apiOverride}\n`);
 let html = await fs.readFile(path.join(out, 'index.html'), 'utf8');
 html = html.replace('<script src="/config.js"></script>', '<script src="/vendor/capacitor.js"></script>\n  <script src="/config.js"></script>');

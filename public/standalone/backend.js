@@ -4,7 +4,10 @@
 //  - "Mis archivos": CBZ/CBR/PDF/EPUB importados, guardados en IndexedDB.
 import { createMangaDex } from '../shared/sources/mangadex.js';
 import { createArchive } from '../shared/sources/archive.js';
+import { createLibres } from '../shared/sources/peppercarrot.js';
 import { createTranslator } from '../shared/translate.js';
+import { createOpds } from '../shared/sources/opds.js';
+import { createMangaPlus, decryptImage } from '../shared/sources/mangaplus.js';
 import { nativeFetch } from '../platform.js';
 
 const DL_CACHE = 'lector-descargas';
@@ -36,7 +39,7 @@ const mdConfig = {
   fetch: (url, opts = {}) => nativeFetch(url, { headers: opts.headers, responseType: 'json' }),
 };
 const mangadex = createMangaDex(mdConfig, () => db.settings);
-const archive = createArchive({ fetch: mdConfig.fetch, archiveBase: window.ARCHIVE_BASE, iiifBase: window.IIIF_BASE });
+const archive = createArchive({ fetch: (url, opts = {}) => nativeFetch(url, { headers: opts.headers, responseType: 'json', timeout: 60000 }), archiveBase: window.ARCHIVE_BASE, iiifBase: window.IIIF_BASE });
 
 // ---------- IndexedDB para archivos importados ----------
 let idbP = null;
@@ -163,6 +166,7 @@ const strip = ({ chapters, addedAt, ...s }) => ({ ...s, chapterCount: chapters.l
 const norm = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
 const local = {
+  id: 'local', name: 'Mis archivos', description: 'Archivos importados en este teléfono', capabilities: { popular: true, latest: true, search: true, filters: true },
   async list({ mode, page = 1, q = '', filters = {} }) {
     let items = await localSeries();
     if (q) items = items.filter(s => norm(s.title).includes(norm(q)));
@@ -220,7 +224,53 @@ function openArchive(f) {
 }
 const mimeOf = n => { const e = n.split('.').pop().toLowerCase(); return e === 'jpg' ? 'image/jpeg' : `image/${e}`; };
 
-const sources = { mangadex, archive, local };
+// ---------- MANGA Plus ----------
+const mangaplus = createMangaPlus({
+  api: window.MANGAPLUS_API || undefined,
+  getSettings: () => db.settings,
+  fetchBytes: async (url, headers) => {
+    const r = await nativeFetch(url, { headers, responseType: 'blob' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return new Uint8Array(await (await r.blob()).arrayBuffer());
+  },
+});
+
+const libres = createLibres({ fetch: (url, opts = {}) => nativeFetch(url, { headers: opts.headers, responseType: 'json' }), base: window.PEPPER_BASE || undefined, getSettings: () => db.settings });
+const sources = { mangadex, mangaplus, archive, libres, local };
+
+// ---------- Catálogos OPDS ----------
+const opdsFetch = (url, opts = {}) => nativeFetch(url, { headers: opts.headers, responseType: 'text' });
+const opdsBlobs = new Map(); // url -> Promise<Blob>
+function opdsBlob(cat, url) {
+  if (opdsBlobs.has(url)) return opdsBlobs.get(url);
+  if (opdsBlobs.size >= 3) opdsBlobs.delete(opdsBlobs.keys().next().value);
+  const p = (async () => {
+    const r = await nativeFetch(url, { headers: cat.authHeaders, responseType: 'blob', timeout: 120000 });
+    if (!r.ok) throw new HttpError(502, `El catálogo respondió ${r.status}`);
+    return r.blob();
+  })();
+  p.catch(() => opdsBlobs.delete(url));
+  opdsBlobs.set(url, p);
+  return p;
+}
+async function opdsArchive(cat, url, fmt) {
+  return openArchive({ id: 'opds:' + url, kind: fmt, blob: await opdsBlob(cat, url) });
+}
+let opdsKey = '';
+function syncOpds() {
+  const cats = db.settings.opdsCatalogs || [];
+  const k = JSON.stringify(cats);
+  if (k === opdsKey) return;
+  opdsKey = k;
+  for (const id of Object.keys(sources)) if (id.startsWith('opds-')) delete sources[id];
+  for (const c of cats) {
+    if (!c?.id || !c.url) continue;
+    const s = createOpds({ catalog: c, fetch: opdsFetch, openRemote: async (sid, url, fmt) => (await opdsArchive(sources[sid], url, fmt)).names.length });
+    s.authHeaders = c.user ? { Authorization: 'Basic ' + btoa(unescape(encodeURIComponent(`${c.user}:${c.pass || ''}`))) } : {};
+    sources[c.id] = s;
+  }
+}
+syncOpds();
 
 // Traducciones guardadas en el teléfono
 let tcache; try { tcache = JSON.parse(localStorage.getItem('translations') || '{}'); } catch { tcache = {}; }
@@ -237,7 +287,7 @@ const translator = createTranslator({
     },
   },
 });
-const src = id => { const s = sources[id]; if (!s) throw new HttpError(404, 'Fuente desconocida'); return s; };
+const src = id => { syncOpds(); const s = sources[id]; if (!s) throw new HttpError(404, 'Fuente desconocida'); return s; };
 
 // ---------- Copias para leer sin conexión ----------
 async function fromDeviceCache(url) {
@@ -260,7 +310,7 @@ export async function handleApi(path, opts = {}) {
     switch (parts[0]) {
       case 'settings':
         if (method === 'PUT') {
-          for (const k of ['languages', 'contentRating', 'dataSaver', 'readerMode', 'doublePage', 'background', 'theme', 'profile', 'translate', 'translateEmail']) if (k in body) db.settings[k] = body[k];
+          for (const k of ['languages', 'contentRating', 'dataSaver', 'readerMode', 'doublePage', 'background', 'theme', 'profile', 'translate', 'translateEmail', 'opdsCatalogs']) if (k in body) db.settings[k] = body[k];
           save();
         }
         return { ...db.settings, libraryDir: null, standalone: true };
@@ -268,11 +318,8 @@ export async function handleApi(path, opts = {}) {
         if (db.settings.translate === false) return { text: body.text || '', translated: false };
         return translator.translate(String(body.text || ''), body.from || 'autodetect');
       case 'sources':
-        return [
-          { id: 'mangadex', name: 'MangaDex', description: 'Catálogo en línea en español', capabilities: { popular: true, latest: true, search: true, filters: true } },
-          { id: 'archive', name: 'Clásicos', description: 'Cómics clásicos de dominio público de Internet Archive', capabilities: { popular: true, latest: true, search: true, filters: true } },
-          { id: 'local', name: 'Mis archivos', description: 'Archivos importados en este teléfono', capabilities: { popular: true, latest: true, search: true, filters: true } },
-        ];
+        syncOpds();
+        return Object.values(sources).map(({ id, name, description, capabilities }) => ({ id, name, description, capabilities }));
       case 's': {
         const [, sid, what, id, sub] = parts;
         if (what === 'filters') return src(sid).getFilters();
@@ -303,7 +350,7 @@ export async function handleApi(path, opts = {}) {
         if (method === 'GET') return Object.values(db.library).sort((a, b) => (b.lastReadAt || b.addedAt) - (a.lastReadAt || a.addedAt));
         if (method === 'POST') {
           const k = key(body.source, body.id);
-          db.library[k] = { ...db.library[k], source: body.source, id: body.id, title: body.title, cover: body.cover, type: body.type, readingDir: body.readingDir,
+          db.library[k] = { ...db.library[k], source: body.source, id: body.id, title: body.title, cover: body.cover, type: body.type, readingDir: body.readingDir, languages: body.languages || db.library[k]?.languages,
             category: body.category || db.library[k]?.category || 'General', addedAt: db.library[k]?.addedAt || Date.now() };
           save(); return db.library[k];
         }
@@ -364,10 +411,40 @@ export async function blobFor(url, { skipDevice = false } = {}) {
     const cache = isCover ? await caches.open(IMG_CACHE).catch(() => null) : null;
     const hit = cache && await cache.match(url);
     if (hit) return hit.blob();
-    let r = await nativeFetch(remote, { responseType: 'blob', timeout: 30000 });
+    const fb = new URLSearchParams(qs).get('f');
+    const timeout = /\.pdf($|\?)/i.test(remote) ? 180000 : 45000;
+    let r = await nativeFetch(remote, { responseType: 'blob', timeout }).catch(e => { if (!fb) throw e; return null; });
+    // Plan B (Internet Archive): si el tamaño pedido falla, se pide la imagen original
+    if ((!r || !r.ok) && fb) r = await nativeFetch(fb, { responseType: 'blob', timeout });
     if (!r.ok && !isCover) throw new HttpError(r.status, `Imagen: ${r.status}`);
     const blob = await r.blob();
     if (cache && r.ok) cache.put(url, new Response(blob, { headers: { 'Content-Type': blob.type } })).catch(() => {});
+    return blob;
+  }
+  if (parts[0] === 'mplus' && parts[1] === 'img') {
+    const qp = new URLSearchParams(qs), k = qp.get('k') || '';
+    const cache = !k ? await caches.open(IMG_CACHE).catch(() => null) : null;
+    const hit = cache && await cache.match(url);
+    if (hit) return hit.blob();
+    const r = await nativeFetch(qp.get('u'), { responseType: 'blob', timeout: 30000, headers: { Referer: 'https://mangaplus.shueisha.co.jp/' } });
+    if (!r.ok) throw new HttpError(r.status, `Imagen: ${r.status}`);
+    let blob = await r.blob();
+    if (k) blob = new Blob([decryptImage(new Uint8Array(await blob.arrayBuffer()), k)], { type: 'image/jpeg' });
+    if (cache) cache.put(url, new Response(blob, { headers: { 'Content-Type': blob.type } })).catch(() => {});
+    return blob;
+  }
+  if (parts[0] === 'opds' && parts[1] === 'res') {
+    const qp = new URLSearchParams(qs);
+    const cat = src(qp.get('c')), u = qp.get('u'), k = qp.get('k');
+    if (k === 'arc') { const arc = await opdsArchive(cat, u, qp.get('f') === 'rar' ? 'rar' : 'zip'); return arc.read(Number(qp.get('i')) || 0); }
+    if (k === 'file') { const b = await opdsBlob(cat, u); return /epub/i.test(u) || /epub/.test(b.type) ? new Blob([b], { type: 'application/epub+zip' }) : new Blob([b], { type: 'application/pdf' }); }
+    const cache = await caches.open(IMG_CACHE).catch(() => null);
+    const hit = cache && await cache.match(url);
+    if (hit) return hit.blob();
+    const r = await nativeFetch(u, { responseType: 'blob', timeout: 30000, headers: cat.authHeaders });
+    if (!r.ok) throw new HttpError(r.status, `Imagen: ${r.status}`);
+    const blob = await r.blob();
+    if (cache) cache.put(url, new Response(blob, { headers: { 'Content-Type': blob.type } })).catch(() => {});
     return blob;
   }
   if (parts[0] === 'local') {

@@ -136,7 +136,7 @@ const ICON = {
   camera: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M9 3h6l1.5 2H20a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h3.5zm3 5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9z"/></svg>',
 };
 
-const typeLabel = t => ({ manga: 'Manga', manhwa: 'Manhwa', manhua: 'Manhua', 'cómic': 'Cómic', libro: 'Libro' }[t] || t || '');
+const typeLabel = t => ({ manga: 'Manga', manhwa: 'Manhwa', manhua: 'Manhua', 'cómic': 'Cómic', libro: 'Libro', carpeta: 'Carpeta' }[t] || t || '');
 // Etiquetas de idioma del contenido
 const LANG_NAME = { es: 'Español (España)', 'es-la': 'Español latino', en: 'Inglés', 'pt-br': 'Portugués', pt: 'Portugués', fr: 'Francés', it: 'Italiano', de: 'Alemán', ja: 'Japonés', ko: 'Coreano', zh: 'Chino' };
 const langName = l => (l ? LANG_NAME[l] || l.toUpperCase() : 'Idioma no indicado');
@@ -157,10 +157,10 @@ export { chapterLabel, typeLabel };
 const fmtDate = d => d ? new Date(d).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
 
 function cardHTML(s, extra = '') {
-  const href = `#/series/${s.source}/${encodeURIComponent(s.id)}`;
-  return `<a class="card" href="${href}">
-    <div class="cover">${s.cover ? `<img loading="lazy" ${imgAttr(s.cover)} alt="">` : ''}
-      ${s.type ? `<span class="badge">${esc(typeLabel(s.type))}</span>` : ''}${langBadge(s.languages)}${extra}</div>
+  const href = s.href || `#/series/${s.source}/${encodeURIComponent(s.id)}`;
+  return `<a class="card${s.type === 'carpeta' ? ' folder' : ''}" href="${esc(href)}">
+    <div class="cover">${s.cover ? `<img loading="lazy" ${imgAttr(s.cover)} alt="">` : s.type === 'carpeta' ? `<span class="folder-ic" aria-hidden="true">📁</span>` : ''}
+      ${s.type ? `<span class="badge">${esc(typeLabel(s.type))}</span>` : ''}${s.type === 'carpeta' ? '' : langBadge(s.languages)}${extra}</div>
     <div class="t">${esc(s.title)}</div></a>`;
 }
 const skeletonGrid = n => `<div class="grid">${Array.from({ length: n }, () => '<div class="card"><div class="cover skel"></div><div class="skel" style="height:14px;width:80%"></div></div>').join('')}</div>`;
@@ -344,6 +344,19 @@ async function viewLibrary() {
   });
   $('#libq').addEventListener('input', e => { q = e.target.value.toLowerCase(); draw(); });
   draw();
+  // Series guardadas antes de que existieran las etiquetas de idioma: completar en segundo plano
+  (async () => {
+    const missing = items.filter(i => !i.languages?.length && i.source !== 'local').slice(0, 15);
+    for (const it of missing) {
+      try {
+        const sr = await api(`/api/s/${it.source}/series/${encodeURIComponent(it.id)}`);
+        if (!sr.languages?.length) continue;
+        it.languages = sr.languages;
+        await api('/api/library', { method: 'POST', body: { ...it, languages: sr.languages } });
+        if (document.body.contains(body)) draw();
+      } catch {}
+    }
+  })();
 }
 
 // ---------- Novedades ----------
@@ -401,7 +414,11 @@ async function viewExplore(_, qs) {
     q: qs.get('q') || '',
     f: JSON.parse(qs.get('f') || '{}'),
   };
+  if (!sources.some(s => s.id === st.src)) st.src = 'mangadex';
   localStorage.setItem('src', st.src);
+  const cur = sources.find(s => s.id === st.src) || {};
+  const caps = cur.capabilities || {};
+  const isOpds = !!caps.opds;
   const setHash = patch => {
     Object.assign(st, patch);
     const p = new URLSearchParams({ src: st.src, mode: st.mode });
@@ -410,26 +427,29 @@ async function viewExplore(_, qs) {
     location.hash = `#/explore?${p}`;
   };
   // El tipo (manga, manhwa, cómics…) se elige con las pestañas rápidas y no cuenta como búsqueda
-  const nFilters = Object.entries(st.f).reduce((a, [k, v]) => k === 'type' && v?.length === 1 ? a : a + (Array.isArray(v) ? v.length : v ? 1 : 0), 0);
+  const nFilters = Object.entries(st.f).reduce((a, [k, v]) => (k === 'type' && v?.length === 1) || k === 'path' || k === 'name' ? a : a + (Array.isArray(v) ? v.length : v ? 1 : 0), 0);
   const quickTypes = st.src === 'mangadex'
     ? [['', 'Todo'], ['manga', 'Manga'], ['manhwa', 'Manhwa'], ['manhua', 'Manhua'], ['comic', 'Cómics']]
     : st.src === 'archive' ? [['', 'Todo'], ['es', 'En español'], ['en', 'En inglés']]
-    : [['', 'Todo'], ['manga', 'Manga'], ['manhwa', 'Manhwa'], ['cómic', 'Cómics'], ['libro', 'Libros']];
+    : st.src === 'local' ? [['', 'Todo'], ['manga', 'Manga'], ['manhwa', 'Manhwa'], ['cómic', 'Cómics'], ['libro', 'Libros']] : [];
   const curType = st.f.type?.length === 1 ? st.f.type[0] : '';
   view.innerHTML = `
     <div class="head"><h1>Explorar</h1>
       <div class="seg" role="tablist" aria-label="Fuente">${sources.map(s => `<button role="tab" class="${s.id === st.src ? 'on' : ''}" data-src="${s.id}" title="${esc(s.description)}">${esc(s.name)}</button>`).join('')}</div></div>
     <form id="sf" class="head" style="margin-bottom:12px">
       <label class="field">${ICON.search}<input id="q" type="search" enterkeyhint="search" placeholder="Buscar título…" value="${esc(st.q)}" aria-label="Buscar título"></label>
-      <button type="button" class="btn" id="fbtn">${ICON.filter}Filtros${nFilters ? ` (${nFilters})` : ''}</button>
+      ${caps.filters !== false ? `<button type="button" class="btn" id="fbtn">${ICON.filter}Filtros${nFilters ? ` (${nFilters})` : ''}</button>` : ''}
     </form>
-    <div class="chips" style="margin-bottom:12px" role="group" aria-label="Tipo">${quickTypes.map(([v, l]) => `<button class="chip ${curType === v ? 'on' : ''}" data-qtype="${v}">${l}</button>`).join('')}</div>
+    ${quickTypes.length ? `<div class="chips" style="margin-bottom:12px" role="group" aria-label="Tipo">${quickTypes.map(([v, l]) => `<button class="chip ${curType === v ? 'on' : ''}" data-qtype="${v}">${l}</button>`).join('')}</div>` : ''}
     ${st.q || nFilters ? `<div class="head"><span class="muted small">Resultados de búsqueda</span><button class="btn" id="clear">Limpiar búsqueda</button></div>` :
+      isOpds ? `<div class="head" style="margin-bottom:12px"><span class="muted small">📚 ${esc(st.f.name || cur.name)}</span>${st.f.path ? '<button class="btn" id="up">Volver</button> <button class="btn" id="home">Inicio del catálogo</button>' : ''}</div>` :
+      caps.latest === false ? '' :
       `<div class="seg" style="margin-bottom:16px">${[['popular', 'Populares'], ['latest', 'Recientes']].map(([m, l]) => `<button class="${st.mode === m ? 'on' : ''}" data-mode="${m}">${l}</button>`).join('')}</div>`}
     <div id="res">${skeletonGrid(12)}</div>
     <div id="more" style="height:48px"></div>`;
 
-  view.querySelectorAll('[data-src]').forEach(b => b.onclick = () => setHash({ src: b.dataset.src, f: {}, q: '' }));
+  view.querySelectorAll('button[data-src]').forEach(b => b.onclick = () => setHash({ src: b.dataset.src, f: {}, q: '' }));
+  view.querySelector('button[data-src].on')?.scrollIntoView({ block: 'nearest', inline: 'center' });
   view.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => setHash({ mode: b.dataset.mode }));
   view.querySelectorAll('[data-qtype]').forEach(b => b.onclick = () => {
     const f = { ...st.f }; if (b.dataset.qtype) f.type = [b.dataset.qtype]; else delete f.type;
@@ -442,7 +462,9 @@ async function viewExplore(_, qs) {
     clearTimeout(deb); const v = e.target.value.trim();
     deb = setTimeout(() => { if (v !== st.q && (v.length >= 3 || v === '')) setHash({ q: v, mode: v ? 'search' : 'popular' }); }, 600);
   });
-  $('#fbtn').onclick = () => openFilters(st.src, st.f, f => setHash({ f, mode: 'search' }));
+  $('#up')?.addEventListener('click', () => history.back());
+  $('#home')?.addEventListener('click', () => setHash({ f: {}, q: '', mode: 'popular' }));
+  if ($('#fbtn')) $('#fbtn').onclick = () => openFilters(st.src, st.f, f => setHash({ f, mode: 'search' }));
 
   const mode = st.q || nFilters ? 'search' : st.mode;
   let page = 1, loading = false, done = false;
@@ -453,7 +475,7 @@ async function viewExplore(_, qs) {
       const p = new URLSearchParams({ mode, page, q: st.q, filters: JSON.stringify(st.f) });
       const data = await api(`/api/s/${st.src}/list?${p}`);
       if (page === 1) res.innerHTML = data.items.length ? '<div class="grid"></div>' :
-        `<div class="empty"><h3>No hay resultados</h3>${st.src === 'local' ? (STANDALONE ? 'Importa tus archivos CBZ, CBR, PDF o EPUB desde Ajustes → Mis archivos.<br><a class="btn primary" href="#/settings">Importar archivos</a>' : 'Copia tus archivos CBZ, CBR, PDF o EPUB a la carpeta de la biblioteca y pulsa “Volver a escanear” en Ajustes.') : 'Prueba con otro título o quita algunos filtros.'}</div>`;
+        `<div class="empty"><h3>No hay resultados</h3>${st.src === 'local' ? (STANDALONE ? 'Importa tus archivos CBZ, CBR, PDF o EPUB desde Ajustes → Mis archivos.<br><a class="btn primary" href="#/settings">Importar archivos</a>' : 'Copia tus archivos CBZ, CBR, PDF o EPUB a la carpeta de la biblioteca y pulsa “Volver a escanear” en Ajustes.') : isOpds ? 'Esta carpeta del catálogo está vacía.' : st.src === 'mangaplus' ? 'MANGA Plus solo muestra títulos en los idiomas que elegiste en Ajustes → Idiomas.' : 'Prueba con otro título o quita algunos filtros.'}</div>`;
       res.querySelector('.grid')?.insertAdjacentHTML('beforeend', data.items.map(s => cardHTML(s)).join(''));
       done = !data.hasMore; page++;
     } catch (e) {
@@ -539,7 +561,12 @@ async function viewSeries([src, id]) {
   }
   let asc = localStorage.getItem('chapAsc') === '1';
   const ordered = () => asc ? [...chapters].reverse() : chapters;
+  // Capítulos retirados de MangaDex: no se listan, pero se avisa cuántos son
+  const removed = chapters.filter(c => c.unavailable);
+  chapters = chapters.filter(c => !c.unavailable);
   const readable = chapters.filter(c => !c.external);
+  // Mantener al día los idiomas guardados en la biblioteca (para la etiqueta de la portada)
+  if (s.inLibrary && s.languages?.length) api('/api/library', { method: 'POST', body: { source: src, id, title: s.title, cover: s.cover, type: s.type, readingDir: s.readingDir, languages: s.languages } }).catch(() => {});
   const oldestFirst = [...readable].reverse();
   const inProgress = [...readable].filter(c => c.progress && !c.progress.done && c.progress.updatedAt).sort((a, b) => b.progress.updatedAt - a.progress.updatedAt)[0];
   let lastDoneIdx = -1; oldestFirst.forEach((c, i) => { if (c.progress?.done) lastDoneIdx = i; });
@@ -630,6 +657,10 @@ async function viewSeries([src, id]) {
     if (prog) return `<span class="status ${prog.status === 'error' ? 'err' : ''}">${prog.status === 'error' ? 'Error' : prog.status === 'queued' ? 'En cola' : `${prog.done}/${prog.total || '…'}`}</span>`;
     return `<span class="icons">${c.downloaded || sq?.status === 'done' ? `<span title="Descargado en la computadora" class="dl-ok">${ICON.pc}</span>` : ''}${onDev ? `<span title="Guardado en este dispositivo" class="dl-dev">${ICON.phone}</span>` : ''}</span>`;
   };
+  const removedNote = !removed.length ? '' : src === 'mangaplus'
+    ? `<p class="notice small" style="text-align:left">${removed.length} capítulo${removed.length === 1 ? ' ya no está' : 's ya no están'} gratis en MANGA Plus (dejan libres los primeros y los más recientes).</p>`
+    : `<p class="notice small" style="text-align:left">${removed.length} capítulo${removed.length === 1 ? ' fue retirado' : 's fueron retirados'} de MangaDex en los idiomas elegidos. Normalmente pasa cuando la obra tiene una edición oficial y la editorial pide quitarlos. Busca la edición oficial (por ejemplo en Webtoon, MANGA Plus o la editorial) o activa otro idioma en Ajustes.</p>`;
+  const sourceNote = s.notice ? `<p class="notice small" style="text-align:left">${esc(s.notice)}</p>` : '';
   const drawChaps = () => {
     $('#chaps').innerHTML = chapters.length ? `<div class="rows">${ordered().map(c => {
       const p = c.progress, done = p?.done;
@@ -646,7 +677,7 @@ async function viewSeries([src, id]) {
           <div class="muted small">${tag} ${meta}</div></a>
         <span data-dl-state>${dlIcons(c)}</span>
         <button class="btn icon" data-mark="${esc(c.id)}" aria-label="${done ? 'Marcar como no leído' : 'Marcar como leído'}" title="${done ? 'Marcar como no leído' : 'Marcar como leído'}" style="${done ? 'color:var(--ok)' : ''}">${ICON.check}</button></div>`;
-    }).join('')}</div>` : `<div class="empty"><h3>No hay capítulos en los idiomas elegidos</h3>Esta serie no tiene capítulos en ${esc((settingsCache?.languages || ['es-la', 'es']).map(langName).join(', ').toLowerCase())}. Puedes activar otro idioma en Ajustes.<br><a class="btn" href="#/settings">Ir a Ajustes</a></div>`;
+    }).join('')}</div>${removedNote}${sourceNote}` : removed.length ? `<div class="empty"><h3>Los capítulos fueron retirados</h3>${removedNote}</div>` : `<div class="empty"><h3>No hay capítulos en los idiomas elegidos</h3>Esta serie no tiene capítulos en ${esc((settingsCache?.languages || ['es-la', 'es']).map(langName).join(', ').toLowerCase())}. Puedes activar otro idioma en Ajustes.<br><a class="btn" href="#/settings">Ir a Ajustes</a></div>`;
   };
   const refreshStates = () => chapters.forEach(c => { const el = view.querySelector(`[data-row="${CSS.escape(c.id)}"] [data-dl-state]`); if (el) el.innerHTML = dlIcons(c); });
   drawChaps();
@@ -912,7 +943,7 @@ async function viewSettings() {
       <div class="setting" style="flex-wrap:wrap"><label for="tre" style="flex:1 1 220px">Correo para ampliar el límite de traducción (opcional)<br><span class="muted small">Sin correo: unas 10 sinopsis al día. Con correo: unas 100. Lo usa solo el servicio MyMemory.</span></label>
         <input class="input" id="tre" type="email" inputmode="email" autocomplete="email" placeholder="tucorreo@ejemplo.com" value="${esc(s.translateEmail || '')}" style="max-width:280px"></div>
     </div>
-    <h2>Idioma de los capítulos (MangaDex)</h2>
+    <h2>Idioma de los capítulos (MangaDex y MANGA Plus)</h2>
     <div class="rows">${ck('languages', 'es-la', 'Español latinoamericano')}${ck('languages', 'es', 'Español de España')}${ck('languages', 'en', 'Inglés <span class="muted small">— mucho más catálogo, sobre todo cómics</span>')}</div>
     <h2>Clasificación de contenido</h2>
     <p class="muted small" style="margin:-4px 0 8px">Marca “Erótico” y “Adulto (+18)” para ver contenido explícito en el catálogo.</p>
@@ -930,6 +961,21 @@ async function viewSettings() {
     <div class="rows"><div class="setting"><div class="grow"><div>Carpeta de la biblioteca</div><div class="muted small" style="word-break:break-all">${esc(s.libraryDir || '')}</div>
       <div class="muted small">Formatos: CBZ, CBR, ZIP, RAR, PDF, EPUB y carpetas de imágenes. Una subcarpeta por serie.</div></div>
       <button class="btn" id="rescan">Volver a escanear</button></div></div>`}
+    <h2>Catálogos OPDS</h2>
+    <p class="muted small" style="margin:-4px 0 8px">Conecta tu propio servidor (Komga, Kavita, Calibre-Web) o una biblioteca digital con OPDS, como Project Gutenberg o Standard Ebooks. Cada catálogo aparece como pestaña en Explorar y permite leer cómics y libros (EPUB, PDF, CBZ, CBR).</p>
+    <div class="rows" id="opds-list">${(s.opdsCatalogs || []).map(c => `<div class="setting"><div class="grow"><div>${esc(c.name)}</div><div class="muted small" style="word-break:break-all">${esc(c.url)}${c.user ? ` · usuario ${esc(c.user)}` : ''}</div></div>
+      <a class="btn" href="#/explore?src=${encodeURIComponent(c.id)}">Abrir</a> <button class="btn" data-opds-del="${esc(c.id)}">Quitar</button></div>`).join('') || '<div class="setting muted small">Aún no agregas ningún catálogo.</div>'}</div>
+    <form id="opds-add" class="rows" style="margin-top:8px">
+      <div class="setting" style="flex-wrap:wrap;gap:8px">
+        <input class="input" id="opds-name" placeholder="Nombre (ej. Mi Komga)" style="flex:1 1 160px">
+        <input class="input" id="opds-url" type="url" inputmode="url" placeholder="https://… dirección del catálogo OPDS" required style="flex:2 1 260px">
+        <input class="input" id="opds-user" autocomplete="username" placeholder="Usuario (opcional)" style="flex:1 1 140px">
+        <input class="input" id="opds-pass" type="password" autocomplete="current-password" placeholder="Contraseña (opcional)" style="flex:1 1 140px">
+        <button class="btn primary" id="opds-btn">Agregar catálogo</button></div>
+      <div class="setting muted small" style="flex-wrap:wrap;gap:6px">Ejemplos: <button type="button" class="chip" data-opds-ex="Project Gutenberg|https://m.gutenberg.org/ebooks.opds/">Project Gutenberg</button>
+        <button type="button" class="chip" data-opds-ex="Standard Ebooks|https://standardebooks.org/feeds/opds">Standard Ebooks</button>
+        <span>· Komga: <code>http://IP:25600/opds/v1.2/catalog</code> · Kavita: la URL OPDS de tu perfil · Calibre-Web: <code>http://IP:8083/opds</code></span></div>
+    </form>
     <h2>Diagnóstico</h2>
     <div class="rows"><div class="setting"><div class="grow"><div>Registro de errores</div><div class="muted small" id="diag-count"></div></div>
       <button class="btn" id="diag-show">Ver</button></div></div>
@@ -937,8 +983,8 @@ async function viewSettings() {
     <h2>Almacenamiento</h2>
     <div class="rows"><div class="setting"><label>${STANDALONE ? 'Caché de portadas' : 'Caché de imágenes en la computadora'}</label><button class="btn" id="cache">Vaciar caché</button></div></div>`);
   $('#back').onclick = () => { location.hash = '#/more'; };
-  const save = async patch => {
-    try { const lib = s.libraryDir; settingsCache = await api('/api/settings', { method: 'PUT', body: patch }); settingsCache.libraryDir = lib; localStorage.setItem('settingsCopy', JSON.stringify(settingsCache)); toast('Guardado'); }
+  const save = async (patch, quiet) => {
+    try { const lib = s.libraryDir; settingsCache = await api('/api/settings', { method: 'PUT', body: patch }); settingsCache.libraryDir = lib; localStorage.setItem('settingsCopy', JSON.stringify(settingsCache)); if (!quiet) toast('Guardado'); }
     catch (e) { toast(e.message); }
   };
   $('#theme').onchange = e => { applyTheme(e.target.value); save({ theme: e.target.value }); };
@@ -958,6 +1004,30 @@ async function viewSettings() {
     if (v && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) { toast('Escribe un correo válido o déjalo vacío'); e.target.classList.add('invalid'); return; }
     e.target.classList.remove('invalid'); save({ translateEmail: v });
   });
+  view.querySelectorAll('[data-opds-ex]').forEach(b => b.onclick = () => { const [n, u] = b.dataset.opdsEx.split('|'); $('#opds-name').value = n; $('#opds-url').value = u; });
+  view.querySelectorAll('[data-opds-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('¿Quitar este catálogo? Lo que tengas en la biblioteca de él dejará de abrirse.')) return;
+    await save({ opdsCatalogs: (s.opdsCatalogs || []).filter(c => c.id !== b.dataset.opdsDel) }); route();
+  });
+  $('#opds-add').onsubmit = async e => {
+    e.preventDefault();
+    let url = $('#opds-url').value.trim();
+    if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
+    try { new URL(url); } catch { toast('Escribe una dirección válida'); return; }
+    const list = s.opdsCatalogs || [];
+    if (list.some(c => c.url === url)) { toast('Ese catálogo ya está agregado'); return; }
+    const id = 'opds-' + Math.abs([...url].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) | 0, 7)).toString(36);
+    const cat = { id, name: $('#opds-name').value.trim() || new URL(url).hostname, url, user: $('#opds-user').value.trim(), pass: $('#opds-pass').value };
+    const btn = $('#opds-btn'); btn.disabled = true; btn.textContent = 'Probando…';
+    await save({ opdsCatalogs: [...list, cat] }, true);
+    try {
+      await api(`/api/s/${id}/list?page=1`);
+      toast('Catálogo agregado'); route();
+    } catch (err) {
+      await save({ opdsCatalogs: list }, true);
+      toast(err.message); btn.disabled = false; btn.textContent = 'Agregar catálogo';
+    }
+  };
   const diagCount = () => { const n = readLog().length; $('#diag-count').textContent = n ? `${n} error(es) recientes` : 'Sin errores registrados'; };
   diagCount();
   $('#diag-show').onclick = () => {

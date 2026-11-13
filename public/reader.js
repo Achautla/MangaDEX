@@ -16,7 +16,16 @@ export async function openReader(root, { src, seriesId, chapterId }) {
   root.innerHTML = `<div class="reader hide-ui ${white ? 'white' : ''}" tabindex="0">
     <div class="stage">${loadingHTML}</div>
     <div class="zones"><div data-z="left"></div><div data-z="center"></div><div data-z="right"></div></div>
+    <div class="eyecare" aria-hidden="true"><div class="ec-warm"></div><div class="ec-dim"></div></div>
     <div class="pagenum" hidden></div>
+    <div class="ec-panel" hidden role="dialog" aria-label="Descanso visual">
+      <div class="ec-row"><label for="ec-on"><b>Descanso visual</b></label><input type="checkbox" id="ec-on"></div>
+      <div class="ec-row"><label for="ec-warm">Calidez</label><input type="range" id="ec-warm" min="0" max="100" step="5"></div>
+      <div class="ec-row"><label for="ec-dim">Brillo</label><input type="range" id="ec-dim" min="40" max="100" step="5"></div>
+      <div class="ec-row"><label for="ec-sepia">Papel (sepia)</label><input type="checkbox" id="ec-sepia"></div>
+      <div class="ec-row"><label for="ec-break">Recordarme descansar cada 20 min</label><input type="checkbox" id="ec-break"></div>
+      <p class="ec-hint">Consejo: cada 20 minutos mira algo a 6 metros durante 20 segundos y parpadea seguido.</p>
+    </div>
     <div class="ui top">
       <button class="btn icon" data-act="close" aria-label="Salir del lector" title="Salir del lector"><svg viewBox="0 0 24 24"><path d="M15.4 5.4 14 4l-8 8 8 8 1.4-1.4L8.8 12z"/></svg></button>
       <div class="grow"><div class="title" data-ui="series"></div><div class="sub" data-ui="chapter"></div></div>
@@ -33,6 +42,7 @@ export async function openReader(root, { src, seriesId, chapterId }) {
         <button class="btn" data-act="mode" title="Cambiar modo de lectura"></button>
         <button class="btn" data-act="double" title="Doble página">Doble página</button>
         <button class="btn" data-act="fit" title="Ajuste de la imagen">Ajustar: alto</button>
+        <button class="btn" data-act="eyecare" title="Descanso visual" aria-pressed="false">Descanso visual</button>
         <span class="zoomctl" role="group" aria-label="Zoom">
           <button class="btn icon" data-act="zout" aria-label="Alejar" title="Alejar">−</button>
           <button class="btn" data-act="zreset" data-ui="zl" title="Restablecer zoom">100%</button>
@@ -46,6 +56,36 @@ export async function openReader(root, { src, seriesId, chapterId }) {
   const ui = k => el.querySelector(`[data-ui="${k}"]`);
   const range = ui('range');
   el.focus();
+
+  // ----- Descanso visual (se guarda en este dispositivo) -----
+  const EC_KEY = 'eyecare';
+  let ec = { on: false, warm: 45, dim: 85, sepia: false, rest: false };
+  try { ec = { ...ec, ...JSON.parse(localStorage.getItem(EC_KEY) || '{}') }; } catch {}
+  let restTimer = null;
+  function applyEyecare() {
+    el.querySelector('.ec-warm').style.opacity = ec.on ? (ec.warm / 100) * 0.38 : 0;
+    el.querySelector('.ec-dim').style.opacity = ec.on ? (100 - ec.dim) / 100 * 0.85 : 0;
+    el.classList.toggle('ec-sepia', ec.on && ec.sepia);
+    const b = el.querySelector('[data-act="eyecare"]');
+    b.classList.toggle('primary', ec.on); b.setAttribute('aria-pressed', String(ec.on));
+    el.querySelector('#ec-on').checked = ec.on; el.querySelector('#ec-warm').value = ec.warm;
+    el.querySelector('#ec-dim').value = ec.dim; el.querySelector('#ec-sepia').checked = ec.sepia; el.querySelector('#ec-break').checked = ec.rest;
+    clearInterval(restTimer);
+    if (ec.rest) restTimer = setInterval(() => toast('👀 Pausa para tus ojos: mira algo lejano 20 segundos y parpadea.'), 20 * 60_000);
+    try { localStorage.setItem(EC_KEY, JSON.stringify(ec)); } catch {}
+  }
+  const ecPanel = el.querySelector('.ec-panel');
+  ecPanel.addEventListener('input', e => {
+    const t = e.target;
+    if (t.id === 'ec-on') ec.on = t.checked;
+    if (t.id === 'ec-warm') { ec.warm = Number(t.value); ec.on = true; }
+    if (t.id === 'ec-dim') { ec.dim = Number(t.value); ec.on = true; }
+    if (t.id === 'ec-sepia') { ec.sepia = t.checked; if (t.checked) ec.on = true; }
+    if (t.id === 'ec-break') ec.rest = t.checked;
+    applyEyecare();
+  });
+  ecPanel.addEventListener('click', e => e.stopPropagation());
+  applyEyecare();
 
   // ----- Datos de la serie y capítulos -----
   let series, chapters;
@@ -346,7 +386,7 @@ export async function openReader(root, { src, seriesId, chapterId }) {
     if (delta > 0 && page >= doc.count) { const n = neighbor(1); if (n != null) loadChapter(n, 0); return; }
     showPage(page + delta * step());
   }
-  const toggleUI = () => el.classList.toggle('hide-ui');
+  const toggleUI = () => { el.classList.toggle('hide-ui'); if (el.classList.contains('hide-ui')) ecPanel.hidden = true; };
   function close() {
     location.hash = `#/series/${src}/${encodeURIComponent(seriesId)}`;
   }
@@ -518,6 +558,7 @@ export async function openReader(root, { src, seriesId, chapterId }) {
       layout(); toast(`Modo: ${MODE_LABEL[mode]} (se recuerda para esta serie)`);
     }
     if (act === 'double') { double = !double; layout(); }
+    if (act === 'eyecare') { ecPanel.hidden = !ecPanel.hidden; if (!ecPanel.hidden && !ec.on) { ec.on = true; applyEyecare(); } }
     if (act === 'fit') { fitWidth = !fitWidth; layout(); }
     if (act === 'zin' || act === 'zout' || act === 'zreset') {
       const f = act === 'zin' ? 1.5 : act === 'zout' ? 1 / 1.5 : 0;
@@ -539,6 +580,7 @@ export async function openReader(root, { src, seriesId, chapterId }) {
     destroyed = true;
     flushProgress(); // guardar al salir
     document.removeEventListener('keydown', onKey);
+    clearInterval(restTimer);
     observers.forEach(o => o.disconnect());
     if (epub) epub.destroy();
   };

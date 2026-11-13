@@ -5,6 +5,10 @@ App web que corre en tu computadora y se usa desde el navegador de la PC o del c
 **Fuentes incluidas**
 
 - **MangaDex (español):** catálogo en línea filtrado a capítulos en español latinoamericano y de España. Tiene búsqueda, populares, recientes y filtros por género, tema, tipo (manga, manhwa o manhua), estado, demografía y clasificación.
+- **MANGA Plus (Shueisha):** manga oficial y gratuito en español latino o inglés (One Piece, Jujutsu Kaisen, Dandadan…). Shueisha deja gratis los primeros y los últimos capítulos de cada serie; los de en medio solo se leen en su app con suscripción. Esta conexión usa la API interna de su web, así que si un día cambian algo puede dejar de funcionar hasta que se actualice.
+- **Clásicos:** cómics de dominio público de Internet Archive.
+- **Webcomics libres:** Pepper&Carrot de David Revoy (licencia CC BY 4.0), en español cuando existe la traducción.
+- **Catálogos OPDS:** en Ajustes → Catálogos OPDS agregas tu propio servidor (Komga, Kavita, Calibre-Web) o bibliotecas digitales como Project Gutenberg o Standard Ebooks. Cada catálogo sale como pestaña en Explorar; navegas por sus carpetas, buscas y lees cómics (CBZ, CBR, página por página) y libros (EPUB, PDF). Admite usuario y contraseña.
 - **Mis archivos:** tu carpeta con CBZ, CBR, ZIP, RAR, PDF, EPUB o carpetas de imágenes. Si tus archivos traen `ComicInfo.xml`, la app lee de ahí el título, los géneros y la sinopsis.
 
 **Lector**
@@ -13,6 +17,8 @@ App web que corre en tu computadora y se usa desde el navegador de la PC o del c
 - Cada serie recuerda su modo y se guarda la página en la que vas.
 - Al terminar un capítulo puedes pasar directo al siguiente.
 - Navegas con toques, deslizando el dedo o con el teclado.
+- Zoom con pellizco, doble toque o botones.
+- **Descanso visual:** filtro cálido, brillo, papel sepia y recordatorio para descansar la vista cada 20 minutos.
 
 **Además:**
 

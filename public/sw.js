@@ -1,5 +1,5 @@
 // Service worker: la app abre sin conexión y lee lo guardado en este dispositivo.
-const SHELL_CACHE = 'lector-shell-v4';
+const SHELL_CACHE = 'lector-shell-v5';
 const API_CACHE = 'lector-api';
 const IMG_CACHE = 'lector-portadas';
 const DL_CACHE = 'lector-descargas';

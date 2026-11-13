@@ -171,18 +171,29 @@ export function createMangaDex(config, getSettings) {
     return mapManga(json.data);
   }
 
+  let unavailableParam = true; // si la API no acepta el parámetro, se deja de enviar
   async function chapters(id) {
     const out = [];
     for (let offset = 0; offset < 5000; offset += 500) {
-      const json = await api(`/manga/${id}/feed`, {
+      const params = {
         limit: 500, offset,
         'translatedLanguage[]': langs(),
         'contentRating[]': ['safe', 'suggestive', 'erotica', 'pornographic'],
         'order[volume]': 'desc', 'order[chapter]': 'desc',
         'includes[]': ['scanlation_group'],
-      }, { ttl: 2 * 60_000 });
+      };
+      // También se piden los capítulos retirados, para poder avisar cuántos ya no están disponibles
+      if (unavailableParam) params.includeUnavailable = '1';
+      let json;
+      try { json = await api(`/manga/${id}/feed`, params, { ttl: 2 * 60_000 }); }
+      catch (e) {
+        if (!unavailableParam) throw e;
+        unavailableParam = false; delete params.includeUnavailable;
+        json = await api(`/manga/${id}/feed`, params, { ttl: 2 * 60_000 });
+      }
       for (const c of json.data) {
         const a = c.attributes;
+        if (a.isUnavailable) { out.push({ id: c.id, unavailable: true, number: a.chapter, volume: a.volume, title: a.title || '', lang: a.translatedLanguage, group: '', date: a.readableAt || a.publishAt, pages: 0 }); continue; }
         // Capítulos alojados en sitios oficiales (p. ej. MangaPlus): se muestran con enlace externo
         const external = a.externalUrl || null;
         if (!external && a.pages === 0) continue;

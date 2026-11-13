@@ -52,6 +52,7 @@ export async function nativeFetch(url, { responseType = 'json', headers = {}, ti
     json: async () => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data),
     text: async () => (typeof r.data === 'string' ? r.data : JSON.stringify(r.data)),
     blob: async () => b64ToBlob(r.data, hdrs.get('content-type') || 'application/octet-stream'),
+    arrayBuffer: async () => (await b64ToBlob(r.data, 'application/octet-stream')).arrayBuffer(),
   };
 }
 async function b64ToBlob(b64, type) {
