@@ -1,6 +1,7 @@
-// src/sources/comicbooks.js
-import * as comicsApi from 'comicbooks-api';
-import mfLink from 'mediafire-getlink';
+import pkg from 'comicbooks-api';
+const comicsApi = pkg.default || pkg;
+import mfLinkPkg from 'mediafire-getlink';
+const mfLink = mfLinkPkg.default || mfLinkPkg;
 import AdmZip from 'adm-zip';
 import fs from 'node:fs/promises';
 import path from 'node:path';
