@@ -418,7 +418,7 @@ async function viewExplore(_, qs) {
   localStorage.setItem('src', st.src);
   const cur = sources.find(s => s.id === st.src) || {};
   const caps = cur.capabilities || {};
-  const isOpds = !!caps.opds;
+  const isOpds = !!(caps.opds || caps.folders);
   const setHash = patch => {
     Object.assign(st, patch);
     const p = new URLSearchParams({ src: st.src, mode: st.mode });

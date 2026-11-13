@@ -5,6 +5,7 @@
 import { createMangaDex } from '../shared/sources/mangadex.js';
 import { createArchive } from '../shared/sources/archive.js';
 import { createLibres } from '../shared/sources/peppercarrot.js';
+import { createCbplus } from '../shared/sources/cbplus.js';
 import { createTranslator } from '../shared/translate.js';
 import { createOpds } from '../shared/sources/opds.js';
 import { createMangaPlus, decryptImage } from '../shared/sources/mangaplus.js';
@@ -236,7 +237,12 @@ const mangaplus = createMangaPlus({
 });
 
 const libres = createLibres({ fetch: (url, opts = {}) => nativeFetch(url, { headers: opts.headers, responseType: 'json' }), base: window.PEPPER_BASE || undefined, getSettings: () => db.settings });
-const sources = { mangadex, mangaplus, archive, libres, local };
+const cbplus = createCbplus({ base: window.CBPLUS_BASE || undefined, fetchText: async (url, headers) => {
+  const r = await nativeFetch(url, { headers, responseType: 'text', timeout: 30000 });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.text();
+} });
+const sources = { mangadex, mangaplus, archive, cbplus, libres, local };
 
 // ---------- Catálogos OPDS ----------
 const opdsFetch = (url, opts = {}) => nativeFetch(url, { headers: opts.headers, responseType: 'text' });

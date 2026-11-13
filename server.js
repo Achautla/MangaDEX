@@ -13,6 +13,7 @@ import { createLocal } from './src/sources/local.js';
 import { createDownloads } from './src/downloads.js';
 import { createArchive } from './src/sources/archive.js';
 import { createLibres } from './src/sources/peppercarrot.js';
+import { createCbplus } from './src/sources/cbplus.js';
 import { createTranslator } from './src/translate.js';
 import { createOpds } from './src/sources/opds.js';
 import { createMangaPlus, decryptImage } from './src/sources/mangaplus.js';
@@ -31,7 +32,7 @@ const config = {
   dataDir: process.env.DATA_DIR || fileCfg.dataDir || path.join(__dirname, 'datos'),
   mangadexApi: process.env.MANGADEX_API || fileCfg.mangadexApi || 'https://api.mangadex.org',
   mangadexUploads: process.env.MANGADEX_UPLOADS || fileCfg.mangadexUploads || 'https://uploads.mangadex.org',
-  mangadexImageHosts: (process.env.MANGADEX_IMAGE_HOSTS || fileCfg.mangadexImageHosts || 'mangadex.network,mangadex.org,archive.org,peppercarrot.com').split(',').map(s => s.trim()),
+  mangadexImageHosts: (process.env.MANGADEX_IMAGE_HOSTS || fileCfg.mangadexImageHosts || 'mangadex.network,mangadex.org,archive.org,peppercarrot.com,comicbookplus.com').split(',').map(s => s.trim()),
   mangadexReport: process.env.MANGADEX_REPORT !== '0',
   imageCacheMB: Number(process.env.IMAGE_CACHE_MB || fileCfg.imageCacheMB || 1024),
 };
@@ -50,7 +51,12 @@ const mangaplus = createMangaPlus({
   },
 });
 const libres = createLibres({ base: process.env.PEPPER_BASE || undefined, getSettings: store.settings });
-const sources = { mangadex, mangaplus, archive, libres, local };
+const cbplus = createCbplus({ base: process.env.CBPLUS_BASE || undefined, fetchText: async (url, headers) => {
+  const r = await fetch(url, { headers, signal: AbortSignal.timeout(30000) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.text();
+} });
+const sources = { mangadex, mangaplus, archive, cbplus, libres, local };
 
 // ---------- Catálogos OPDS (Ajustes → Catálogos OPDS) ----------
 const opdsDir = path.join(config.dataDir, 'cache-opds');
