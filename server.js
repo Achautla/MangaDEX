@@ -13,6 +13,7 @@ import { createLocal } from './src/sources/local.js';
 import { createDownloads } from './src/downloads.js';
 import { createArchive } from './src/sources/archive.js';
 import { createTranslator } from './src/translate.js';
+import { createComicBooks, CACHE_DIR } from './src/sources/comicbooks.js';
 import { ZipArchive } from 'archiver';
 import { HttpError } from './src/util.js';
 
