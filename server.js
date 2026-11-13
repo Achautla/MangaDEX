@@ -16,6 +16,7 @@ import { createTranslator } from './src/translate.js';
 import { createComicBooks, CACHE_DIR } from './src/sources/comicbooks.js';
 import { ZipArchive } from 'archiver';
 import { HttpError } from './src/util.js';
+import { createMarmota } from './src/sources/marmota.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -39,6 +40,8 @@ const mangadex = createMangaDex(config, store.settings);
 const archive = createArchive({ archiveBase: process.env.ARCHIVE_BASE, iiifBase: process.env.IIIF_BASE });
 const comicbooks = createComicBooks(); // <--- NUEVA LÍNEA
 const sources = { mangadex, archive, local, comicbooks }; // <--- MODIFICADO
+const marmota = createMarmota();
+const sources = { mangadex, archive, local, comicbooks, marmota }; // Añade 'marmota'
 const downloads = createDownloads({ config, store, sources });
 store.db.translations ||= {};
 const translator = createTranslator({
