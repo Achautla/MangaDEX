@@ -81,21 +81,21 @@ jobs:
           ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Renombrar
-        run: cp "${{ steps.p.outputs.dir }}/android/app/build/outputs/apk/debug/app-debug.apk" MangaDex.apk
+        run: cp "${{ steps.p.outputs.dir }}/android/app/build/outputs/apk/debug/app-debug.apk" PirateReader.apk
 
       - name: Guardar como artefacto
         uses: actions/upload-artifact@v6
         with:
-          name: MangaDex-apk
-          path: MangaDex.apk
+          name: PirateReader-apk
+          path: PirateReader.apk
 
       - name: Publicar en Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
-          name: MangaDex 1.0.${{ github.run_number }}
+          name: Pirate Reader 1.0.${{ github.run_number }}
           body: |
             APK compilado automáticamente desde el commit ${{ github.sha }}.
             Descárgalo en tu teléfono Android y ábrelo para instalar (o actualizar) la app.
-          files: MangaDex.apk
+          files: PirateReader.apk
           make_latest: true
