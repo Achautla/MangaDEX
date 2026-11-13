@@ -3,6 +3,7 @@
 //  - Biblioteca, progreso, historial y ajustes: localStorage.
 //  - "Mis archivos": CBZ/CBR/PDF/EPUB importados, guardados en IndexedDB.
 import { createMangaDex } from '../shared/sources/mangadex.js';
+import { createArchive } from '../shared/sources/archive.js';
 import { nativeFetch } from '../platform.js';
 
 const DL_CACHE = 'lector-descargas';
@@ -34,6 +35,7 @@ const mdConfig = {
   fetch: (url, opts = {}) => nativeFetch(url, { headers: opts.headers, responseType: 'json' }),
 };
 const mangadex = createMangaDex(mdConfig, () => db.settings);
+const archive = createArchive({ fetch: mdConfig.fetch, archiveBase: window.ARCHIVE_BASE, iiifBase: window.IIIF_BASE });
 
 // ---------- IndexedDB para archivos importados ----------
 let idbP = null;
@@ -215,7 +217,7 @@ function openArchive(f) {
 }
 const mimeOf = n => { const e = n.split('.').pop().toLowerCase(); return e === 'jpg' ? 'image/jpeg' : `image/${e}`; };
 
-const sources = { mangadex, local };
+const sources = { mangadex, archive, local };
 const src = id => { const s = sources[id]; if (!s) throw new HttpError(404, 'Fuente desconocida'); return s; };
 
 // ---------- Copias para leer sin conexión ----------
@@ -245,7 +247,8 @@ export async function handleApi(path, opts = {}) {
         return { ...db.settings, libraryDir: null, standalone: true };
       case 'sources':
         return [
-          { id: 'mangadex', name: 'MangaDex (español)', description: 'Catálogo en línea en español', capabilities: { popular: true, latest: true, search: true, filters: true } },
+          { id: 'mangadex', name: 'MangaDex', description: 'Catálogo en línea en español', capabilities: { popular: true, latest: true, search: true, filters: true } },
+          { id: 'archive', name: 'Clásicos', description: 'Cómics clásicos de dominio público de Internet Archive', capabilities: { popular: true, latest: true, search: true, filters: true } },
           { id: 'local', name: 'Mis archivos', description: 'Archivos importados en este teléfono', capabilities: { popular: true, latest: true, search: true, filters: true } },
         ];
       case 's': {
@@ -335,7 +338,7 @@ export async function blobFor(url, { skipDevice = false } = {}) {
   const parts = p.split('/').filter(Boolean).slice(1).map(decodeURIComponent);
   if (parts[0] === 'img') {
     const remote = new URLSearchParams(qs).get('u');
-    const isCover = /\/covers\//.test(remote);
+    const isCover = /\/covers\/|\/services\/img\//.test(remote);
     const cache = isCover ? await caches.open(IMG_CACHE).catch(() => null) : null;
     const hit = cache && await cache.match(url);
     if (hit) return hit.blob();

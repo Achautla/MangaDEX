@@ -73,7 +73,8 @@ export function createMangaDex(config, getSettings) {
     obj['es-la'] || obj.es || obj.en || obj['ja-ro'] || obj['ko-ro'] || obj['zh-ro'] || Object.values(obj)[0] || 'Sin título';
 
   const TYPE_BY_LANG = { ja: 'manga', ko: 'manhwa', zh: 'manhua', 'zh-hk': 'manhua' };
-  const LANGS_BY_TYPE = { manga: ['ja'], manhwa: ['ko'], manhua: ['zh', 'zh-hk'] };
+  // "Cómics": obras originales en idiomas occidentales (cómic, webcómic, novela gráfica)
+  const LANGS_BY_TYPE = { manga: ['ja'], manhwa: ['ko'], manhua: ['zh', 'zh-hk'], comic: ['en', 'es', 'es-la', 'fr', 'it', 'pt', 'pt-br', 'de', 'pl', 'ru'] };
 
   function mapManga(m) {
     const a = m.attributes;
@@ -148,7 +149,7 @@ export function createMangaDex(config, getSettings) {
         'Formato': tags.filter(t => t.group === 'format'),
         'Contenido': tags.filter(t => t.group === 'content'),
       },
-      type: [['manga', 'Manga (Japón)'], ['manhwa', 'Manhwa (Corea)'], ['manhua', 'Manhua (China)']],
+      type: [['manga', 'Manga (Japón)'], ['manhwa', 'Manhwa (Corea)'], ['manhua', 'Manhua (China)'], ['comic', 'Cómic / webcómic (occidental)']],
       status: [['ongoing', 'En curso'], ['completed', 'Finalizado'], ['hiatus', 'En pausa'], ['cancelled', 'Cancelado']],
       demographic: [['shounen', 'Shōnen'], ['shoujo', 'Shōjo'], ['seinen', 'Seinen'], ['josei', 'Josei']],
       contentRating: [['safe', 'Apto'], ['suggestive', 'Sugerente'], ['erotica', 'Erótico'], ['pornographic', 'Adulto']],
@@ -247,7 +248,7 @@ export function createMangaDex(config, getSettings) {
 
   return {
     id: 'mangadex',
-    name: 'MangaDex (español)',
+    name: 'MangaDex',
     description: 'Catálogo en línea con traducciones al español de España y Latinoamérica.',
     capabilities: { popular: true, latest: true, search: true, filters: true, updates: true },
     list, getFilters, series, chapters, pages, updates, report,

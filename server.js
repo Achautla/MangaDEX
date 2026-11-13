@@ -11,6 +11,7 @@ import { createStore } from './src/store.js';
 import { createMangaDex } from './src/sources/mangadex.js';
 import { createLocal } from './src/sources/local.js';
 import { createDownloads } from './src/downloads.js';
+import { createArchive } from './src/sources/archive.js';
 import { ZipArchive } from 'archiver';
 import { HttpError } from './src/util.js';
 
@@ -25,7 +26,7 @@ const config = {
   dataDir: process.env.DATA_DIR || fileCfg.dataDir || path.join(__dirname, 'datos'),
   mangadexApi: process.env.MANGADEX_API || fileCfg.mangadexApi || 'https://api.mangadex.org',
   mangadexUploads: process.env.MANGADEX_UPLOADS || fileCfg.mangadexUploads || 'https://uploads.mangadex.org',
-  mangadexImageHosts: (process.env.MANGADEX_IMAGE_HOSTS || fileCfg.mangadexImageHosts || 'mangadex.network,mangadex.org').split(',').map(s => s.trim()),
+  mangadexImageHosts: (process.env.MANGADEX_IMAGE_HOSTS || fileCfg.mangadexImageHosts || 'mangadex.network,mangadex.org,archive.org').split(',').map(s => s.trim()),
   mangadexReport: process.env.MANGADEX_REPORT !== '0',
   imageCacheMB: Number(process.env.IMAGE_CACHE_MB || fileCfg.imageCacheMB || 1024),
 };
@@ -33,7 +34,8 @@ const config = {
 const store = createStore(path.join(config.dataDir, 'db.json'));
 const local = createLocal(config);
 const mangadex = createMangaDex(config, store.settings);
-const sources = { mangadex, local };
+const archive = createArchive({ archiveBase: process.env.ARCHIVE_BASE, iiifBase: process.env.IIIF_BASE });
+const sources = { mangadex, archive, local };
 const downloads = createDownloads({ config, store, sources });
 const imgCacheDir = path.join(config.dataDir, 'cache-imagenes');
 fs.mkdirSync(imgCacheDir, { recursive: true });

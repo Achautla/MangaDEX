@@ -1,6 +1,6 @@
 {
   "appId": "com.brayand.mangadex",
-  "appName": "MangaDex",
+  "appName": "Pirate Reader",
   "webDir": "www",
   "android": {
     "allowMixedContent": false,

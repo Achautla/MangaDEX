@@ -1,4 +1,4 @@
-// MangaDex — lector personal de cómics, manhwa y manga (SPA sin compilación).
+// Pirate Reader — lector personal de cómics, manhwa y manga (SPA sin compilación).
 import { openReader } from './reader.js';
 import { STANDALONE, platformApi, imgAttr, shareFiles, syncSystemBars } from './platform.js';
 import {
@@ -194,7 +194,7 @@ async function viewWelcome(_, qs) {
   const lang = (s.languages || ['es', 'es-la']).length === 2 ? 'both' : s.languages[0];
   const theme = localStorage.getItem('theme') || s.theme || 'light';
   view.innerHTML = `<div class="welcome">
-    ${editing ? `<button class="btn" id="back" style="margin-bottom:16px">${ICON.back}Volver</button>` : `<img class="hero-img" src="/brand/portada.jpg" alt="MangaDex — Cómics, Manhwa y Manga">`}
+    ${editing ? `<button class="btn" id="back" style="margin-bottom:16px">${ICON.back}Volver</button>` : `<img class="hero-img" src="/brand/portada.jpg" alt="Pirate Reader — Cómics, Manhwa y Manga">`}
     <h1>${editing ? 'Editar perfil' : 'Bienvenido'}</h1>
     <p class="muted" style="margin:0">${editing ? (STANDALONE ? 'Tus cambios se guardan en este teléfono.' : 'Los cambios se aplican en todos tus dispositivos.') : (STANDALONE ? 'Crea tu perfil para empezar. Tu biblioteca, progreso y descargas quedan guardados en este teléfono.' : 'Crea tu perfil para empezar. Tu biblioteca, progreso y descargas quedan guardados en tu computadora.')}</p>
     <form class="form" id="pf" novalidate>
@@ -289,7 +289,7 @@ function resizeImage(file, size) {
 async function viewLibrary() {
   const s = await getSettings().catch(() => ({}));
   const top = `<div class="topbar">
-      <div class="brand grow"><img src="/brand/logo-256.png" alt=""><span class="wordmark"><span class="a">MANGA</span><span class="b">DEX</span></span></div>
+      <div class="brand grow"><img src="/brand/logo-256.png" alt=""><span class="wordmark"><span class="a">PIRATE</span> <span class="b">READER</span></span></div>
       <a href="#/more" aria-label="Tu perfil">${avatarHTML(s.profile)}</a></div>`;
   view.insertAdjacentHTML('beforeend', top + `<div class="head"><h1>Biblioteca</h1></div><div id="libbody">${skeletonGrid(6)}</div>`);
   const body = $('#libbody');
@@ -399,7 +399,13 @@ async function viewExplore(_, qs) {
     if (Object.keys(st.f).length) p.set('f', JSON.stringify(st.f));
     location.hash = `#/explore?${p}`;
   };
-  const nFilters = Object.values(st.f).reduce((a, v) => a + (Array.isArray(v) ? v.length : v ? 1 : 0), 0);
+  // El tipo (manga, manhwa, cómics…) se elige con las pestañas rápidas y no cuenta como búsqueda
+  const nFilters = Object.entries(st.f).reduce((a, [k, v]) => k === 'type' && v?.length === 1 ? a : a + (Array.isArray(v) ? v.length : v ? 1 : 0), 0);
+  const quickTypes = st.src === 'mangadex'
+    ? [['', 'Todo'], ['manga', 'Manga'], ['manhwa', 'Manhwa'], ['manhua', 'Manhua'], ['comic', 'Cómics']]
+    : st.src === 'archive' ? [['', 'Todo'], ['es', 'En español'], ['en', 'En inglés']]
+    : [['', 'Todo'], ['manga', 'Manga'], ['manhwa', 'Manhwa'], ['cómic', 'Cómics'], ['libro', 'Libros']];
+  const curType = st.f.type?.length === 1 ? st.f.type[0] : '';
   view.innerHTML = `
     <div class="head"><h1>Explorar</h1>
       <div class="seg" role="tablist" aria-label="Fuente">${sources.map(s => `<button role="tab" class="${s.id === st.src ? 'on' : ''}" data-src="${s.id}" title="${esc(s.description)}">${esc(s.name)}</button>`).join('')}</div></div>
@@ -407,6 +413,7 @@ async function viewExplore(_, qs) {
       <label class="field">${ICON.search}<input id="q" type="search" enterkeyhint="search" placeholder="Buscar título…" value="${esc(st.q)}" aria-label="Buscar título"></label>
       <button type="button" class="btn" id="fbtn">${ICON.filter}Filtros${nFilters ? ` (${nFilters})` : ''}</button>
     </form>
+    <div class="chips" style="margin-bottom:12px" role="group" aria-label="Tipo">${quickTypes.map(([v, l]) => `<button class="chip ${curType === v ? 'on' : ''}" data-qtype="${v}">${l}</button>`).join('')}</div>
     ${st.q || nFilters ? `<div class="head"><span class="muted small">Resultados de búsqueda</span><button class="btn" id="clear">Limpiar búsqueda</button></div>` :
       `<div class="seg" style="margin-bottom:16px">${[['popular', 'Populares'], ['latest', 'Recientes']].map(([m, l]) => `<button class="${st.mode === m ? 'on' : ''}" data-mode="${m}">${l}</button>`).join('')}</div>`}
     <div id="res">${skeletonGrid(12)}</div>
@@ -414,6 +421,10 @@ async function viewExplore(_, qs) {
 
   view.querySelectorAll('[data-src]').forEach(b => b.onclick = () => setHash({ src: b.dataset.src, f: {}, q: '' }));
   view.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => setHash({ mode: b.dataset.mode }));
+  view.querySelectorAll('[data-qtype]').forEach(b => b.onclick = () => {
+    const f = { ...st.f }; if (b.dataset.qtype) f.type = [b.dataset.qtype]; else delete f.type;
+    setHash({ f });
+  });
   $('#clear')?.addEventListener('click', () => setHash({ q: '', f: {}, mode: 'popular' }));
   $('#sf').onsubmit = e => { e.preventDefault(); setHash({ q: $('#q').value.trim(), mode: 'search' }); };
   // búsqueda al escribir (con pausa)
@@ -538,7 +549,7 @@ async function viewSeries([src, id]) {
       <div>
         <h1>${esc(s.title)}</h1>
         <div class="muted small">${esc([...new Set([...(s.authors || []), ...(s.artists || [])])].join(', '))}</div>
-        <div class="meta">${meta.map(m => `<span>${esc(m)}</span>`).join('<span>·</span>')}<span>·</span><span>${chapters.length} capítulos en español</span></div>
+        <div class="meta">${meta.map(m => `<span>${esc(m)}</span>`).join('<span>·</span>')}<span>·</span><span>${chapters.length} capítulos</span></div>
         <div class="actions">
           ${cont ? `<a class="btn primary" href="#/read/${src}/${encodeURIComponent(id)}/${encodeURIComponent(cont.id)}">${inProgress || lastDoneIdx >= 0 ? 'Continuar' : 'Empezar a leer'} · ${esc(chapterLabel(cont))}</a>` : ''}
           <button class="btn" id="lib">${s.inLibrary ? ICON.check + 'En biblioteca' : ICON.plus + 'Agregar a biblioteca'}</button>
@@ -550,6 +561,7 @@ async function viewSeries([src, id]) {
     ${s.genres?.length ? `<div class="chips" style="margin:16px 0">${s.genres.map(genreChip).join('')}</div>` : ''}
     ${s.description ? `<div class="desc" id="desc">${esc(s.description)}</div><button class="btn" id="more" style="margin-bottom:8px">Ver más</button>` : ''}
     ${src === 'mangadex' ? '<p class="muted small">Contenido de MangaDex. El crédito de cada traducción es del grupo indicado en el capítulo.</p>' : ''}
+    ${src === 'archive' ? `<p class="muted small">Cómic de dominio público alojado en Internet Archive. <a href="https://archive.org/details/${encodeURIComponent(id)}" target="_blank" rel="noopener" style="color:var(--accent)">Ver en archive.org</a></p>` : ''}
     <div class="head" style="margin-top:24px"><h2 style="margin:0;flex:1">Capítulos</h2>
       <button class="btn" id="markall">Marcar todo leído</button>
       <button class="btn icon" id="sort" aria-label="Invertir orden" title="Invertir orden">${ICON.sort}</button></div>
@@ -595,7 +607,7 @@ async function viewSeries([src, id]) {
       return `<div class="row ${done ? 'read' : ''}" data-row="${esc(c.id)}">
         <a class="grow" href="#/read/${src}/${encodeURIComponent(id)}/${encodeURIComponent(c.id)}">
           <div class="title">${esc(chapterLabel(c))}</div>
-          <div class="muted small">${esc([c.group, fmtDate(c.date), c.lang === 'es-la' ? 'Latino' : c.lang === 'es' ? 'España' : '', p && !done && p.total ? `pág. ${p.page + 1}/${p.total}` : ''].filter(Boolean).join(' · '))}</div></a>
+          <div class="muted small">${esc([c.group, fmtDate(c.date), c.lang === 'es-la' ? 'Latino' : c.lang === 'es' ? 'España' : c.lang === 'en' ? 'Inglés' : '', p && !done && p.total ? `pág. ${p.page + 1}/${p.total}` : ''].filter(Boolean).join(' · '))}</div></a>
         <span data-dl-state>${dlIcons(c)}</span>
         <button class="btn icon" data-mark="${esc(c.id)}" aria-label="${done ? 'Marcar como no leído' : 'Marcar como leído'}" title="${done ? 'Marcar como no leído' : 'Marcar como leído'}" style="${done ? 'color:var(--ok)' : ''}">${ICON.check}</button></div>`;
     }).join('')}</div>` : `<div class="empty"><h3>No hay capítulos en español</h3>Esta serie aún no tiene capítulos traducidos al español en esta fuente.</div>`;
@@ -831,7 +843,7 @@ async function viewMore() {
       ${row('#/settings', ICON.gear, 'Ajustes', 'Tema, idioma, lector y almacenamiento')}
     </div>
     <div style="text-align:center;margin-top:32px"><img src="/brand/logo-256.png" alt="" width="56" height="56" style="border-radius:14px;margin:0 auto 8px">
-      <div class="wordmark"><span class="a">MANGA</span><span class="b">DEX</span></div>
+      <div class="wordmark"><span class="a">PIRATE</span> <span class="b">READER</span></div>
       <div class="muted small" style="margin-top:4px">Cómics | Manhwa | Manga · uso personal</div></div>`);
 }
 
@@ -856,8 +868,9 @@ async function viewSettings() {
       <div class="setting"><label for="bgc">Fondo del lector</label><select id="bgc">${[['theme', 'Según el tema'], ['black', 'Negro'], ['white', 'Blanco']].map(([v, l]) => `<option value="${v}" ${(s.background || 'theme') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     </div>
     <h2>Idioma de los capítulos (MangaDex)</h2>
-    <div class="rows">${ck('languages', 'es-la', 'Español latinoamericano')}${ck('languages', 'es', 'Español de España')}</div>
+    <div class="rows">${ck('languages', 'es-la', 'Español latinoamericano')}${ck('languages', 'es', 'Español de España')}${ck('languages', 'en', 'Inglés <span class="muted small">— mucho más catálogo, sobre todo cómics</span>')}</div>
     <h2>Clasificación de contenido</h2>
+    <p class="muted small" style="margin:-4px 0 8px">Marca “Erótico” y “Adulto (+18)” para ver contenido explícito en el catálogo.</p>
     <div class="rows">${ck('contentRating', 'safe', 'Apto para todos')}${ck('contentRating', 'suggestive', 'Sugerente')}${ck('contentRating', 'erotica', 'Erótico')}${ck('contentRating', 'pornographic', 'Adulto (+18)')}</div>
     <h2>Lector</h2>
     <div class="rows">

@@ -1,4 +1,4 @@
-# MangaDex — lector de cómics, manhwa y manga (uso personal)
+# Pirate Reader — lector de cómics, manhwa y manga (uso personal)
 
 App web que corre en tu computadora y se usa desde el navegador de la PC o del celular (se puede instalar como app).
 
@@ -35,7 +35,7 @@ El repositorio trae una “receta” (`.github/workflows/android.yml`) para que 
 
 1. Sube **todo** el contenido de esta carpeta a tu repositorio, incluida la carpeta oculta `.github` y el archivo `package-lock.json`.
 2. En GitHub, abre la pestaña **Actions**. Verás “Compilar APK” en marcha; tarda de 5 a 8 minutos.
-3. Cuando termine con ✅, ve a **Releases** (a la derecha, en la página principal del repo) y descarga **MangaDex.apk** desde tu teléfono.
+3. Cuando termine con ✅, ve a **Releases** (a la derecha, en la página principal del repo) y descarga **PirateReader.apk** desde tu teléfono.
 4. Ábrelo para instalarlo. Android pedirá permitir “instalar apps desconocidas” para el navegador. Si Play Protect avisa, elige **Instalar de todas formas**, porque es tu propia app.
 
 Cada vez que cambies algo y lo subas, aparece una versión nueva en Releases que se instala encima de la anterior **sin perder tus datos**. La firma es siempre la misma porque está en `android-signing/`.
@@ -194,4 +194,4 @@ La interfaz la detecta sola: aparece como otra pestaña en **Explorar**.
 
 Los datos se guardan en la carpeta `datos/`: perfil, biblioteca, progreso, caché y descargas. Para respaldarlos, copia toda esa carpeta.
 
-> El nombre y el logo “MangaDex” coinciden con los del sitio mangadex.org. Para uso personal no hay problema; si algún día publicas o compartes la app, conviene cambiarles el nombre.
+
